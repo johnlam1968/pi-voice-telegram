@@ -44,6 +44,14 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.11.0: added two more LLM tools, `pi_voice_telegram_config_read`
+ *         and `pi_voice_telegram_config_write`, gated on the new
+ *         `tools.writable: true` opt-in. The write tool does
+ *         schema-validated atomic writes (refuses `$schema`, `_hint`,
+ *         and any unknown key). The LLM can now introspect + modify
+ *         the companion settings file end-to-end, but only when the
+ *         operator has explicitly opted in. Two-step (read → write)
+ *         is encouraged so the LLM can show old → new diffs.
  * v0.10.0: added a third LLM tool, `pi_voice_telegram_schema`, that
  *         returns the companion settings JSON Schema as text. The
  *         LLM can call it to discover what knobs are available, what
@@ -115,6 +123,8 @@ import {
 	resolveTtsDefaults,
 } from "./config.js";
 import {
+	registerConfigReadTool,
+	registerConfigWriteTool,
 	registerPiVoiceTelegramSchemaTool,
 	registerSynthesizeVoiceTool,
 	registerTranscribeAudioTool,
@@ -174,8 +184,11 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		// The schema-discovery tool (`pi_voice_telegram_schema`) is
 		// always registered when `tools.enabled` is true, since it's
 		// documentation rather than an action — it can't make any
-		// side effects, only return the schema text. See `tools.ts`
-		// for the per-tool promptGuidelines.
+		// side effects, only return the schema text. The
+		// config-read / config-write tools are additionally gated on
+		// `tools.writable: true` — an explicit operator opt-in
+		// because the write tool mutates a file on disk. See
+		// `tools.ts` for the per-tool promptGuidelines.
 		if (cfg.tools?.enabled === true) {
 			if (cfg.tools.tts?.enabled !== false) {
 				registerSynthesizeVoiceTool({
@@ -197,6 +210,17 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			// It's documentation, not capability, and is useful
 			// regardless of whether TTS/STT are individually enabled.
 			registerPiVoiceTelegramSchemaTool(pi);
+
+			// Config read/write tools: double opt-in. The operator
+			// must set `tools.writable: true` to enable. This is the
+			// "agent-modifies-config" feature — the LLM can read the
+			// current settings and modify them via schema-validated
+			// atomic writes. The write tool refuses to modify
+			// $schema / _hint / unknown keys (see config-io.ts).
+			if (cfg.tools.writable === true) {
+				registerConfigReadTool(pi);
+				registerConfigWriteTool(pi);
+			}
 		}
 
 		// Suppress unused-variable warnings for sttDefaults — the

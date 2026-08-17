@@ -6,6 +6,7 @@
   },
   "tools": {
     "enabled": false,
+    "writable": false,
     "tts": {
       "enabled": true,
       "name": "synthesize_voice"

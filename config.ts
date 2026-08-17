@@ -69,6 +69,15 @@ export interface CompanionConfig {
 	tools?: {
 		/** Master switch for tool registration. Default: false. */
 		enabled?: boolean;
+		/**
+		 * Opt-in flag for the LLM's `pi_voice_telegram_config_read`
+		 * and `pi_voice_telegram_config_write` tools (v0.11.0+). When
+		 * true, the LLM can read the current companion settings and
+		 * modify them via the config tool. The read tool is also gated
+		 * on this flag so operators get an explicit "I'm letting the
+		 * LLM see/modify the file" affordance. Default: false.
+		 */
+		writable?: boolean;
 		/** TTS tool: synthesize_voice. Default: enabled when `tools.enabled` is true. */
 		tts?: {
 			enabled?: boolean;
@@ -204,6 +213,7 @@ const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	inbound: { echoEnabled: true },
 	tools: {
 		enabled: false,
+		writable: false,
 		tts: { enabled: true, name: "synthesize_voice" },
 		stt: { enabled: true, name: "transcribe_audio" },
 	},

@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.10.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added a third LLM tool, `pi_voice_telegram_schema`, that returns the schema as text.
+**Status:** v0.11.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write tools).
 
 ## What this is
 
@@ -187,6 +187,39 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 
 **Bug fixed during testing:** the first version of the walker only did `obj[seg]`, so the agent's first attempt with `key: "tts"` failed with "key path 'tts' not found". Added the `obj.properties[seg]` fallback so short form works as the agent expected. Fixed and re-deployed in the same commit cycle.
 
+## v0.11.0 — agent-modifies-config opt-in (shipped)
+
+**Why:** the v0.10.0 schema tool gave the LLM a way to discover what knobs exist, but no way to actually modify them. Operators who wanted the LLM to manage the file end-to-end (e.g. "set tts.lang to ja") had to make the edit themselves. v0.11.0 closes the loop with a double opt-in: the operator must set `tools.writable: true` in addition to `tools.enabled: true`. The LLM then gets two more tools, one to read current state and one to make schema-validated atomic writes.
+
+**What shipped:**
+
+- New module `config-io.ts` (5,914 bytes) with the read/write primitives:
+  - `readSettings()` / `readSettingsRaw()` — load + parse the JSON
+  - `lookupKey(obj, dotted)` — read a single value (with the same `properties.` fallback as the schema tool)
+  - `writeKey(key, value)` — schema-validated, atomic write
+  - `settingsMetadata()` — mtime/size snapshot for change detection
+  - `splitKey()` — the safety guard. Refuses:
+    - `$schema` and `_hint` (reserved, managed by the extension)
+    - Any top-level key not in `{inbound, tools, tts, stt}` (refuse to invent new keys)
+- New tools in `tools.ts`:
+  - `registerConfigReadTool(pi)` — `pi_voice_telegram_config_read`. Returns the full file or a per-key value.
+  - `registerConfigWriteTool(pi)` — `pi_voice_telegram_config_write`. Sets one key, returns old → new diff, tells the operator to restart.
+- `index.ts` registers both tools only when `cfg.tools.writable === true`. The schema tool stays registered when only `tools.enabled` is true.
+- `pi-voice-telegram.schema.json` updated with the new `tools.writable` field, plus a `_hint`-style description explaining the safety model.
+- `CompanionConfig` interface extended with `tools.writable?: boolean`.
+- `DEFAULT_CONFIG` and `examples/pi-voice-telegram.json` updated to include `writable: false`.
+- `package.json` — bumped to v0.11.0.
+
+**Tested on `pi-agent-john` on 2026-08-17:**
+
+| # | Config | Probe | Result |
+|---|---|---|---|
+| 1 | `tools.writable` absent | "what voice tools do you have?" | Pass — agent lists 3 tools (synthesize_voice, transcribe_audio, pi_voice_telegram_schema). The two config tools are NOT in the list. **Opt-in gate works.** |
+| 2 | `tools.writable: true` | "what is the current tts.lang?" | Pass — agent calls `pi_voice_telegram_config_read` with `key: "tts.lang"`, gets back `"Chinese,Yue"`, reports it. |
+| 3 | `tools.writable: true` | "set tts.lang to ja" | Pass (with a real bug found and fixed mid-test) — agent called read first (per the promptGuidelines), then schema, then write. File's `tts.lang` was updated, no stray top-level `lang` key. The LLM mapped "ja" → "Japanese" based on the schema's `examples` list — a feature, not a bug. |
+
+**Bug found and fixed during testing:** the first version of `writeKey` called `setNestedPath(current, remainder, value)` — passing the top-level object, not the root's child. This created the new key at the wrong level (top-level `lang` instead of `tts.lang`). Caught by the live test when I `cat`-ed the file and saw a stray `"lang": "ja"` at the top level. Fixed by descending into the root before calling `setNestedPath`. Re-deployed in the same commit cycle.
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -289,3 +322,4 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`. Auto-seeded `DEFAULT_CONFIG` and `examples/pi-voice-telegram.json` brought up to date.
 - **v0.9.0** — self-describing settings file. `pi-voice-telegram.schema.json` (JSON Schema with descriptions/examples for every key) shipped in the repo; `$schema` + `_hint` fields added to the seeded file. Editors and LLMs get inline hints; humans get an at-a-glance pointer in `cat` output.
 - **v0.10.0** — `pi_voice_telegram_schema` tool. The LLM can now call a tool that returns the companion settings schema as text (full or per-key). Useful for the agent-modifies-config feature (planned v0.11+).
+- **v0.11.0** — agent-modifies-config opt-in. New `tools.writable: true` flag enables two more tools (`pi_voice_telegram_config_read` / `_write`). Schema-validated, atomic, refuses `$schema` / `_hint` / unknown keys. 3 tests passed against `pi-agent-john`; one real bug found and fixed mid-test.

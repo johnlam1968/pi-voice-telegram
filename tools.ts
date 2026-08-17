@@ -50,6 +50,11 @@ import {
 	type ResolvedSttDefaults,
 	type ResolvedTtsDefaults,
 } from "./config.js";
+import {
+	lookupKey as ioLookupKey,
+	readSettings as ioReadSettings,
+	writeKey as ioWriteKey,
+} from "./config-io.js";
 
 // --- Per-tool overrides from the companion settings file ---
 
@@ -304,6 +309,116 @@ export function registerPiVoiceTelegramSchemaTool(pi: ExtensionAPI): void {
 					},
 				],
 				details: { mode: "key", key: params.key, found: true },
+			};
+		},
+	});
+}
+
+// --- pi_voice_telegram_config_read / pi_voice_telegram_config_write (v0.11.0) ---
+//
+// Both tools are gated on `tools.writable: true` in the companion
+// settings. They let the LLM read the current settings and modify
+// them via the schema-validated, atomic write path in `config-io.ts`.
+// The write tool refuses to modify `$schema` / `_hint` or any key
+// not present in the schema (see the splitKey allow-list).
+
+const CONFIG_READ_PROMPT = {
+	description:
+		"Read the current value(s) of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Without a `key` parameter, returns the full settings object as formatted JSON. With a dotted-path `key` (e.g. 'tts.lang', 'inbound.echoEnabled', 'tools.writable'), returns just that one value. Use this before modifying settings to confirm the current state.",
+	promptSnippet: "Reads the current companion settings (full or per-key).",
+	promptGuidelines: [
+		"Use pi_voice_telegram_config_read to inspect the operator's current settings before suggesting edits. The agent should know what's already set.",
+		"Pass the `key` parameter for a single value, omit it for the full file. The dotted path uses the same lookup as the schema tool — short form ('tts.voice') works as well as explicit form.",
+		"This tool is only registered when the operator has set `tools.writable: true` in the companion settings. If it's not available, ask the operator to opt in.",
+	],
+};
+
+const CONFIG_WRITE_PROMPT = {
+	description:
+		"Modify a single key in the pi-voice-telegram companion settings file. The write is schema-validated (refuses unknown keys) and atomic (write-to-tmp + rename). Always reads the current value first, applies the change, and returns both the old and new values in the result. Reminder: changes take effect only after the agent session is restarted — inform the operator.",
+	promptSnippet: "Schema-validated atomic write to the companion settings (single key + value).",
+	promptGuidelines: [
+		"Use pi_voice_telegram_config_write when the operator asks you to change a setting (e.g. 'set tts.lang to ja', 'turn on the schema tool').",
+		"Always read the current value with pi_voice_telegram_config_read FIRST so you can report old → new. This is the operator's safety net — the write is atomic, but reading first means you can also confirm the diff.",
+		"Pass the dotted `key` path and the new `value` (as a JSON value, not a string). The tool will reject writes to `$schema`, `_hint`, or any key not in the schema.",
+		"After a successful write, tell the operator: 'restart the session for this change to take effect.' The extension reads the config once per session_start.",
+	],
+};
+
+export function registerConfigReadTool(pi: ExtensionAPI): void {
+	pi.registerTool({
+		name: "pi_voice_telegram_config_read",
+		label: "Read pi-voice-telegram settings",
+		description: CONFIG_READ_PROMPT.description,
+		promptSnippet: CONFIG_READ_PROMPT.promptSnippet,
+		promptGuidelines: CONFIG_READ_PROMPT.promptGuidelines,
+		parameters: Type.Object({
+			key: Type.Optional(
+				Type.String({
+					description:
+						"Optional dotted path into the settings. E.g. 'tts.voice', 'inbound.echoEnabled', 'tools.writable'. Omit to return the full file as formatted JSON.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			const current = ioReadSettings();
+			if (!params.key) {
+				return {
+					content: [{ type: "text", text: JSON.stringify(current, null, 2) }],
+					details: { mode: "full", keys: Object.keys(current).length },
+				};
+			}
+			const value = ioLookupKey(current, params.key);
+			if (value === undefined) {
+				const topLevel = Object.keys(current).filter((k) => !k.startsWith("$"));
+				throw new Error(
+					`pi_voice_telegram_config_read: key '${params.key}' not found. ` +
+						`Top-level keys present: ${topLevel.length ? topLevel.join(", ") : "(none)"}.`,
+				);
+			}
+			return {
+				content: [{ type: "text", text: JSON.stringify(value, null, 2) }],
+				details: { mode: "key", key: params.key, type: typeof value },
+			};
+		},
+	});
+}
+
+export function registerConfigWriteTool(pi: ExtensionAPI): void {
+	pi.registerTool({
+		name: "pi_voice_telegram_config_write",
+		label: "Modify pi-voice-telegram setting",
+		description: CONFIG_WRITE_PROMPT.description,
+		promptSnippet: CONFIG_WRITE_PROMPT.promptSnippet,
+		promptGuidelines: CONFIG_WRITE_PROMPT.promptGuidelines,
+		parameters: Type.Object({
+			key: Type.String({
+				description:
+					"Dotted path to the key to set. E.g. 'tts.lang', 'inbound.echoEnabled', 'tools.enabled'. Refused: '$schema', '_hint', and any key not in the schema.",
+			}),
+			value: Type.Unknown({
+				description:
+					"New value for the key. JSON value: string, number, boolean, or object. For top-level keys like 'inbound.echoEnabled' pass a primitive. For nested keys like 'tts.lang' pass the new primitive value; the tool will preserve the rest of the object.",
+			}),
+		}),
+		async execute(_toolCallId, params) {
+			const result = ioWriteKey(params.key, params.value);
+			return {
+				content: [
+					{
+						type: "text",
+						text: `Wrote ${result.key} in ${result.path}.\n` +
+							`Old: ${JSON.stringify(result.oldValue)}\n` +
+							`New: ${JSON.stringify(result.newValue)}\n\n` +
+							`Restart the agent session for this change to take effect.`,
+					},
+				],
+				details: {
+					key: result.key,
+					oldValue: result.oldValue,
+					newValue: result.newValue,
+					path: result.path,
+				},
 			};
 		},
 	});
