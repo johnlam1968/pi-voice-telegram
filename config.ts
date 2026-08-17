@@ -130,24 +130,26 @@ const STT_FALLBACKS = {
 
 /** Resolve the TTS defaults: JSON > env > hardcoded. */
 export function resolveTtsDefaults(cfg: CompanionConfig | undefined): ResolvedTtsDefaults {
+	const cfgTimeout = cfg?.tts?.timeoutMs;
+	const envTimeout = process.env.PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS;
+	const fallbackTimeout = envTimeout ? Number(envTimeout) : TTS_FALLBACKS.timeoutMs;
 	return {
 		voice: cfg?.tts?.voice ?? process.env.PI_MM_TTS_VOICE ?? TTS_FALLBACKS.voice,
 		lang: cfg?.tts?.lang ?? process.env.PI_MM_TTS_LANG ?? TTS_FALLBACKS.lang,
 		model: cfg?.tts?.model ?? process.env.PI_MM_TTS_MODEL ?? TTS_FALLBACKS.model,
-		timeoutMs: Number(
-			cfg?.tts?.timeoutMs ?? Number(process.env.PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS) || TTS_FALLBACKS.timeoutMs,
-		),
+		timeoutMs: cfgTimeout ?? fallbackTimeout,
 	};
 }
 
 /** Resolve the STT defaults: JSON > env > hardcoded. */
 export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSttDefaults {
+	const cfgTimeout = cfg?.stt?.timeoutMs;
+	const envTimeout = process.env.PI_TELEGRAM_STT_TIMEOUT_MS;
+	const fallbackTimeout = envTimeout ? Number(envTimeout) : STT_FALLBACKS.timeoutMs;
 	return {
 		lang: cfg?.stt?.lang ?? process.env.PI_TELEGRAM_LANG ?? STT_FALLBACKS.lang,
 		baseUrl: cfg?.stt?.baseUrl ?? process.env.WHISPER_SERVER_URL ?? STT_FALLBACKS.baseUrl,
-		timeoutMs: Number(
-			cfg?.stt?.timeoutMs ?? Number(process.env.PI_TELEGRAM_STT_TIMEOUT_MS) || STT_FALLBACKS.timeoutMs,
-		),
+		timeoutMs: cfgTimeout ?? fallbackTimeout,
 	};
 }
 

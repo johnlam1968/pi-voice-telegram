@@ -275,6 +275,17 @@ To enable tools after the seed, edit the file (flip `tools.enabled` to `true`) a
     "enabled": false,
     "tts":  { "enabled": true, "name": "synthesize_voice" },
     "stt":  { "enabled": true, "name": "transcribe_audio" }
+  },
+  "tts": {
+    "voice":     "Cantonese_PlayfulMan",
+    "lang":      "Chinese,Yue",
+    "model":     "speech-2.8-hd",
+    "timeoutMs": 30000
+  },
+  "stt": {
+    "lang":      "yue",
+    "baseUrl":   "http://127.0.0.1:8080",
+    "timeoutMs": 60000
   }
 }
 ```
@@ -284,11 +295,20 @@ To enable tools after the seed, edit the file (flip `tools.enabled` to `true`) a
 | `inbound.echoEnabled` | `true` | When `false`, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the `🎙️` confirmation. |
 | `tools.enabled` | `false` | Master switch for LLM tool registration. When `false`, neither `synthesize_voice` nor `transcribe_audio` is registered, regardless of the per-tool flags. |
 | `tools.tts.enabled` | `true` | Register `synthesize_voice`. Honored only when `tools.enabled` is `true`. |
-| `tools.tts.name` | `synthesize_voice` | Override the tool name (rare; for namespace collision avoidance). |
+| `tools.tts.name` | `synthesize_voice` | Override the tool name (rare; for namespace collision avoidance). The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+). |
 | `tools.stt.enabled` | `true` | Register `transcribe_audio`. Honored only when `tools.enabled` is `true`. |
-| `tools.stt.name` | `transcribe_audio` | Override the tool name. |
+| `tools.stt.name` | `transcribe_audio` | Override the tool name. Templated like `tools.tts.name`. |
+| `tts.voice` | `Cantonese_PlayfulMan` | Default voice ID for both the bridge-driven TTS path and the `synthesize_voice` tool. Resolution: JSON > `$PI_MM_TTS_VOICE` > hardcoded. v0.8.0+. |
+| `tts.lang` | `Chinese,Yue` | Default language boost. JSON > `$PI_MM_TTS_LANG` > hardcoded. v0.8.0+. |
+| `tts.model` | `speech-2.8-hd` | Default TTS model. JSON > `$PI_MM_TTS_MODEL` > hardcoded. v0.8.0+. |
+| `tts.timeoutMs` | `30000` | Per-call synthesis timeout (covers mm-tts + ffmpeg). JSON > `$PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS` > hardcoded. v0.8.0+. |
+| `stt.lang` | `yue` | Default language code for both the inbound echo STT and the `transcribe_audio` tool. JSON > `$PI_TELEGRAM_LANG` > hardcoded. v0.8.0+. |
+| `stt.baseUrl` | `http://127.0.0.1:8080` | whisper-server base URL. JSON > `$WHISPER_SERVER_URL` > hardcoded. v0.8.0+. |
+| `stt.timeoutMs` | `60000` | Per-call STT timeout. JSON > `$PI_TELEGRAM_STT_TIMEOUT_MS` > hardcoded. v0.8.0+. |
 
 The `synthesize_voice` tool only writes the OGG/Opus file — the agent delivers it using the bridge's `telegram_attach` tool (`@llblab/pi-telegram` registers this; no companion-side wiring needed). The two-step pattern keeps chat-target resolution, captioning, and multipart-upload concerns in the bridge.
+
+The `tts.*` and `stt.*` fields (v0.8.0+) move the per-extension TTS/STT defaults out of env vars. Layering is **JSON > env var > hardcoded** — an operator who sets `tts.voice` in the JSON overrides `$PI_MM_TTS_VOICE`, which overrides the hardcoded `Cantonese_PlayfulMan`. Env vars are preserved as fallbacks so the cluster's `docker-compose.yaml` doesn't need to change to upgrade. The `synthesis-provider.ts` reads these once per `session_start` and applies them to the bridge-driven TTS path (so changing voice/lang in JSON takes effect after a session restart, not mid-session). The `telegram.json` bridge file still wins for the bridge-owned `outboundHandlers[voice].defaults.{voice,lang,rate}` keys.
 
 Settings are read once per `session_start`. Reload via session restart (or `/reload` if the host agent supports it).
 

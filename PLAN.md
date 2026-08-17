@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.7.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 makes the settings file auto-seed on first run.
+**Status:** v0.8.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name.
 
 ## What this is
 
@@ -113,6 +113,36 @@ Defaults: `inbound.echoEnabled = true`, `tools.enabled = false`. Anything not pr
 
 The auto-seed is a UX improvement, not a behavior change: operators who don't touch the new file get the same experience as v0.5.0 (echo on, tools off). Operators who want tools edit the file and restart.
 
+## v0.8.0 — per-extension TTS/STT defaults + templated prompt text (shipped)
+
+**Why:** (a) per-extension TTS defaults lived in env vars only (`PI_MM_TTS_VOICE`, `PI_MM_TTS_LANG`, etc.) — the operator-facing dial for "what does the agent sound like" was scattered across shell env, not the JSON. (b) The v0.6.0 tool prompt text was hardcoded to mention "synthesize_voice" / "transcribe_audio" by name; when the operator renamed the tool, the LLM saw inconsistent references (function name vs prose). v0.8.0 fixes both.
+
+**What shipped:**
+
+- `config.ts` extended with `tts.{voice,lang,model,timeoutMs}` and `stt.{lang,baseUrl,timeoutMs}` fields. Two new exported functions: `resolveTtsDefaults(cfg)` and `resolveSttDefaults(cfg)`, both layering JSON > env > hardcoded default.
+- `synthesis-provider.ts` refactored from a bare `export const` to a `createMmTtsSynthesisProvider({ tts })` factory + a `mmTtsSynthesisProvider` default export for backwards compat. The factory takes the resolved TTS defaults; the bridge-owned `telegram.json` is still re-read on every call for `outboundHandlers[voice].defaults.{voice,lang,rate}` layering.
+- `tools.ts` rewritten: takes the resolved defaults as an argument, templates the description / promptSnippet / promptGuidelines text against the configured tool name. Two new helpers `buildTtsPrompt(name)` / `buildSttPrompt(name)` make the templating explicit.
+- `index.ts` updated: resolves the defaults once per `session_start`, passes them to both the synthesis provider factory and the tool registrations. The `sttDefaults` resolution is still triggered even when tools are off, so the JSON > env layering is exercised at startup.
+- `package.json` — bumped to v0.8.0.
+
+**Knob resolution precedence (v0.8.0+):**
+
+| Source | Priority | Example for `tts.voice` |
+|---|---|---|
+| `pi-voice-telegram.json` `tts.voice` | 1 (highest) | `"Cantonese_PlayfulMan"` from JSON wins |
+| `$PI_MM_TTS_VOICE` env var | 2 | falls back to env when JSON is absent |
+| Hardcoded constant | 3 (lowest) | `"Cantonese_PlayfulMan"` always wins for absent JSON + absent env |
+
+The env-var layer is preserved as a fallback so the cluster's `docker-compose.yaml` doesn't need to change to upgrade.
+
+**Verified against `pi-agent-john` on 2026-08-17:**
+
+| Test | Config | Result |
+|---|---|---|
+| 1. Env-var fallback | No `tts.*` / `stt.*` in JSON, no env vars set | Pass — agent reports hardcoded defaults (`Cantonese_PlayfulMan`, `Chinese,Yue`, `speech-2.8-hd`, `yue`, `http://127.0.0.1:8080`) |
+| 2. JSON overrides hardcoded | `tts.lang: "Japanese"`, `stt.lang: "en"` | Pass — agent reports `Default lang: Japanese` for `synthesize_voice` |
+| 3. Name templating | `tools.tts.name: "tts_yue"` + `tts.lang: "ja"` | Pass — agent's response uses `tts_yue` throughout, zero `synthesize_voice` references (v0.6.0/v0.7.0 round-5/6 bug fixed) |
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -129,31 +159,18 @@ The auto-seed is a UX improvement, not a behavior change: operators who don't to
 
 ## v0.7.0+ candidates
 
-### From the v0.7.0 knob test matrix (verified all 6 knobs work; discovered these gaps)
-
-- **Move per-extension TTS/STT defaults into the settings file** (real gap from operator feedback). Currently in env vars; should be JSON-configurable:
-  - `tts.voice` (default `Cantonese_PlayfulMan`; replaces `PI_MM_TTS_VOICE`)
-  - `tts.lang` (default `Chinese,Yue`; replaces `PI_MM_TTS_LANG`)
-  - `tts.model` (default `speech-2.8-hd`; replaces `PI_MM_TTS_MODEL`)
-  - `tts.timeoutMs` (default `30000`; replaces `PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS`)
-  - `stt.lang` (default `yue`; replaces `PI_TELEGRAM_LANG`)
-  - `stt.baseUrl` (default `http://127.0.0.1:8080`; replaces `WHISPER_SERVER_URL`)
-  - `stt.timeoutMs` (default `60000`; replaces `PI_TELEGRAM_STT_TIMEOUT_MS`)
-
-  Env vars should still be respected as lower-priority fallbacks (so the existing docker-compose.yaml doesn't need updating), but the JSON should win when present.
-
-- **Template the prompt text against the configured tool name** (real bug from rounds 5–6 of the matrix). Currently `description`, `promptSnippet`, and `promptGuidelines` in `tools.ts` hardcode "synthesize_voice" / "transcribe_audio" as string literals. When the operator renames the tool via `tools.tts.name: "tts_cantonese"`, the function name is renamed but the description still says "synthesize_voice". The LLM notices the inconsistency and works around it, but it's a real bug. v0.8+ should template all prompt text against the resolved name.
+### From the v0.8.0 test matrix (verified all 3 v0.8.0 tests pass; remaining candidates)
 
 - **Agent-modifies-config opt-in** (operator suggestion). Allow the LLM to read and write `pi-voice-telegram.json` via a tool, gated on a `writable: true` flag. Trade-off: more agent autonomy vs risk of accidental destructive edits. Default off.
 
 - **Hot-reload the config** (operator suggestion). `fs.watch(pi-voice-telegram.json)` in `config.ts`, re-register tools + handlers on change. Currently any config change requires a session restart because registrations happen on `session_start`. Real UX win for the operator.
 
-### Other v0.7.0+ candidates (from earlier design discussion)
+### Other v0.8.0+ candidates (from earlier design discussion)
 
 - Adaptive `promptGuidelines` based on `voice.replyMode` (item 1).
 - One-step TTS delivery if the bridge exposes a `sendTelegramVoice` primitive (item 2).
 - `inbound.echoTemplate` (item 4).
-- A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang defaults). Useful for debugging without a restart.
+- A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang/defaults). Useful for debugging without a restart.
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
 
 ## Test matrix (v0.6.0+v0.7.0 verification)
@@ -191,3 +208,4 @@ All 6 knobs verified against `pi-agent-john` on 2026-08-17:
 - **v0.5.0** — `echo.ts` consolidated; `clearTranscriptCache` exports; per-session transcript cache.
 - **v0.6.0** — companion settings file + LLM tool surface (`synthesize_voice`, `transcribe_audio`).
 - **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file. 6-knob test matrix completed against `pi-agent-john`.
+- **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`.
