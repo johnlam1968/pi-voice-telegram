@@ -2,9 +2,20 @@
   "name": "pi-voice-telegram",
   "version": "0.5.0",
   "description": "Telegram voice/text companion extension for the Pi coding agent. Registers a TTS synthesis provider (mm-tts-backed by default) and a voice transcript echo for incoming voice/audio messages. Behavior is fully driven by the bridge's telegram.json config (voice.replyMode, voice.sendTranscript, etc.).",
-  "private": true,
   "type": "module",
   "license": "MIT",
+  "author": {
+    "name": "John Lam",
+    "email": "jwebster@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnlam1968/pi-voice-telegram.git"
+  },
+  "homepage": "https://github.com/johnlam1968/pi-voice-telegram#readme",
+  "bugs": {
+    "url": "https://github.com/johnlam1968/pi-voice-telegram/issues"
+  },
   "keywords": [
     "pi-extension",
     "telegram",
@@ -13,7 +24,8 @@
     "voice",
     "transcript",
     "echo",
-    "mm-tts"
+    "mm-tts",
+    "whisper"
   ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -27,8 +39,18 @@
   "pi": {
     "extensions": ["./index.ts"]
   },
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
   "files": [
     "*.ts",
-    "package.json"
+    "package.json",
+    "README.md"
   ]
 }
