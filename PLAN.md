@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.8.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name.
+**Status:** v0.9.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema.
 
 ## What this is
 
@@ -143,6 +143,31 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 | 2. JSON overrides hardcoded | `tts.lang: "Japanese"`, `stt.lang: "en"` | Pass — agent reports `Default lang: Japanese` for `synthesize_voice` |
 | 3. Name templating | `tools.tts.name: "tts_yue"` + `tts.lang: "ja"` | Pass — agent's response uses `tts_yue` throughout, zero `synthesize_voice` references (v0.6.0/v0.7.0 round-5/6 bug fixed) |
 
+## v0.9.0 — self-describing settings file (shipped)
+
+**Why:** the v0.6.0–v0.8.0 settings file was a flat blob of values — humans editing it had no in-file documentation, editors offered no inline hints, and LLMs inspecting the file had to guess what the keys meant. v0.9.0 makes the file self-describing via two complementary mechanisms.
+
+**What shipped:**
+
+- `pi-voice-telegram.schema.json` (new file in the repo). Full JSON Schema (draft-07) with `description`, `default`, and `examples` for every key, every level of nesting. This is the canonical machine-readable spec — both the operator's editor and the LLM can read it.
+- `_hint` and `$schema` fields at the top of the seeded `pi-voice-telegram.json`. The `$schema` is the HTTP URL of the schema on GitHub raw content, so editors (VS Code, IntelliJ) use it for inline validation + autocomplete. The `_hint` is a free-form string that the extension ignores but humans see at the top of `cat` output.
+- `CompanionConfig` interface extended with optional `$schema?: string` and `_hint?: string` fields. The extension never reads them; they pass through the JSON parser but the typed config in TS doesn't reference them.
+- `DEFAULT_CONFIG` updated to include the same `$schema` + `_hint` so the auto-seeded file matches the example byte-for-byte.
+- `examples/pi-voice-telegram.json` updated with the new fields.
+- `package.json` — bumped to v0.9.0.
+
+**Verified on `pi-agent-john`:**
+
+| Check | Result |
+|---|---|
+| Auto-seeded file is byte-equal to `examples/pi-voice-telegram.json` | ✓ Pass — `diff` returned no differences |
+| Editor would pick up the schema (tested by checking the URL is in the file) | ✓ Pass — `$schema` field is a valid HTTP URL |
+| Agent still loads cleanly with the new fields present | ✓ Pass — no parse errors; bridge connected; agent responding to probes |
+
+**Why not put the docs in `_hint` per-field instead of using JSON Schema?** JSON Schema is the standard for documenting JSON files; editors and tools (jq, ajv, IDEs, LLMs) already understand it. Inlining long descriptions into the JSON would make the file ~5× larger and force every consumer to parse comments. The `$schema` + `_hint` split keeps the data minimal and the documentation external. The `_hint` is just a one-line pointer to the schema for `cat`-ing the file.
+
+**Future LLM-side discovery (deferred to v0.9+ / v1.0+):** the LLM doesn't currently have a way to read `pi-voice-telegram.schema.json` because it lives in the npm package, not the workspace. A `pi_voice_telegram_schema` tool that returns the schema content as a string would let the LLM introspect the structure on demand — useful for the v0.9+ agent-modifies-config feature.
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -243,3 +268,4 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.6.0** — companion settings file + LLM tool surface (`synthesize_voice`, `transcribe_audio`).
 - **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file. 6-knob test matrix completed against `pi-agent-john`.
 - **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`. Auto-seeded `DEFAULT_CONFIG` and `examples/pi-voice-telegram.json` brought up to date.
+- **v0.9.0** — self-describing settings file. `pi-voice-telegram.schema.json` (JSON Schema with descriptions/examples for every key) shipped in the repo; `$schema` + `_hint` fields added to the seeded file. Editors and LLMs get inline hints; humans get an at-a-glance pointer in `cat` output.

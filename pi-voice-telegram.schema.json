@@ -1,0 +1,134 @@
+{
+	"$schema": "https://json-schema.org/draft-07/schema#",
+	"$id": "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
+	"title": "pi-voice-telegram companion settings",
+	"description": "Per-agent companion settings for the pi-voice-telegram extension. Edit and restart the agent session for changes to take effect. See README.md for the canonical key reference; this schema is the machine-readable form. The companion extension lives at `~/.pi/agent/npm/node_modules/pi-voice-telegram/` and reads this file at `~/.pi/agent/pi-voice-telegram.json` on each session start.",
+	"type": "object",
+	"additionalProperties": false,
+	"properties": {
+		"_hint": {
+			"type": "string",
+			"description": "Free-form hint string. Ignored by the extension. Use as a place for an at-a-glance reminder of where the docs are; the extension never reads this field, but humans and LLMs inspecting the file will see it."
+		},
+		"inbound": {
+			"type": "object",
+			"description": "Controls the inbound voice/audio echo pipeline (downloads voice notes, runs STT via whisper-server, sends a 🎙️ echo to the user, and feeds the transcript into the agent prompt).",
+			"additionalProperties": false,
+			"properties": {
+				"echoEnabled": {
+					"type": "boolean",
+					"default": true,
+					"description": "When false, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the 🎙️ confirmation. Set this to false to fully disable the deterministic inbound STT pipeline (e.g. if you only want the LLM-callable transcribe_audio tool to do STT on demand).",
+					"examples": [true, false]
+				}
+			}
+		},
+		"tools": {
+			"type": "object",
+			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's `synthesize_voice` + `transcribe_audio` are gated on these flags.",
+			"additionalProperties": false,
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"default": false,
+					"description": "Master switch for tool registration. When false, neither `synthesize_voice` nor `transcribe_audio` is registered, regardless of the per-tool flags below. When true, the per-tool flags decide which of the two are actually exposed.",
+					"examples": [true, false]
+				},
+				"tts": {
+					"type": "object",
+					"description": "TTS tool (text-to-speech).",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": {
+							"type": "boolean",
+							"default": true,
+							"description": "Register the TTS tool. Honored only when `tools.enabled` is true. Default true.",
+							"examples": [true, false]
+						},
+						"name": {
+							"type": "string",
+							"default": "synthesize_voice",
+							"description": "Override the tool name. Useful for namespace-collision avoidance. The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+), so renames are reflected in the LLM-facing strings.",
+							"examples": ["synthesize_voice", "tts_cantonese", "tts_yue"]
+						}
+					}
+				},
+				"stt": {
+					"type": "object",
+					"description": "STT tool (speech-to-text).",
+					"additionalProperties": false,
+					"properties": {
+						"enabled": {
+							"type": "boolean",
+							"default": true,
+							"description": "Register the STT tool. Honored only when `tools.enabled` is true. Default true.",
+							"examples": [true, false]
+						},
+						"name": {
+							"type": "string",
+							"default": "transcribe_audio",
+							"description": "Override the tool name. Same templating behavior as `tools.tts.name`.",
+							"examples": ["transcribe_audio", "transcribe_yue", "stt_cantonese"]
+						}
+					}
+				}
+			}
+		},
+		"tts": {
+			"type": "object",
+			"description": "Per-extension TTS defaults. Resolution order (highest priority first): explicit JSON value > matching env var (PI_MM_TTS_*) > hardcoded default. v0.8.0+. The synthesis provider reads these once per session_start and applies them to the bridge-driven TTS path AND the LLM-callable synthesize_voice tool. The bridge's `telegram.json` `outboundHandlers[voice].defaults.{voice,lang,rate}` keys still win for the bridge-owned bridge-driven path.",
+			"additionalProperties": false,
+			"properties": {
+				"voice": {
+					"type": "string",
+					"default": "Cantonese_PlayfulMan",
+					"description": "Voice ID. Replaces $PI_MM_TTS_VOICE when present in JSON. MiniMax T2A API voice ID; the full list is documented at https://platform.minimaxi.com/docs/api-reference/speech-t2a-http.",
+					"examples": ["Cantonese_PlayfulMan", "Cantonese_GentleLady", "English_SereneWoman"]
+				},
+				"lang": {
+					"type": "string",
+					"default": "Chinese,Yue",
+					"description": "Language boost passed to the TTS API. Replaces $PI_MM_TTS_LANG. Format is `Language,Dialect` (e.g. `Chinese,Yue` for Cantonese, `English,American` for en-US, `Chinese,Mandarin` for Mandarin).",
+					"examples": ["Chinese,Yue", "Chinese,Mandarin", "English,American", "Japanese"]
+				},
+				"model": {
+					"type": "string",
+					"default": "speech-2.8-hd",
+					"description": "TTS model ID. Replaces $PI_MM_TTS_MODEL. `speech-2.8-hd` is the high-def Cantonese-friendly default; older `speech-01`/`speech-02` legacy models have a 480-char per-chunk limit.",
+					"examples": ["speech-2.8-hd", "speech-2.6", "speech-01", "speech-02"]
+				},
+				"timeoutMs": {
+					"type": "number",
+					"default": 30000,
+					"description": "Per-call synthesis timeout in ms. Covers both mm-tts HTTP and ffmpeg encoding. Replaces $PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS. Bump if you have long text inputs and see ffmpeg timeouts.",
+					"examples": [15000, 30000, 60000, 120000]
+				}
+			}
+		},
+		"stt": {
+			"type": "object",
+			"description": "Per-extension STT defaults. Resolution order (highest priority first): explicit JSON value > matching env var (PI_TELEGRAM_LANG, WHISPER_SERVER_URL, PI_TELEGRAM_STT_TIMEOUT_MS) > hardcoded default. v0.8.0+. The inbound echo AND the LLM-callable transcribe_audio tool both use these defaults.",
+			"additionalProperties": false,
+			"properties": {
+				"lang": {
+					"type": "string",
+					"default": "yue",
+					"description": "BCP-47 / ISO-639-1 language code. Replaces $PI_TELEGRAM_LANG. whisper-server uses this as the language hint for transcription.",
+					"examples": ["yue", "en", "zh", "ja", "ko"]
+				},
+				"baseUrl": {
+					"type": "string",
+					"default": "http://127.0.0.1:8080",
+					"description": "whisper-server base URL. Replaces $WHISPER_SERVER_URL. The container shares network_mode: host with the host, so `127.0.0.1` is the host's whisper-server from inside the container.",
+					"examples": ["http://127.0.0.1:8080", "http://localhost:8080", "http://whisper.internal:8080"]
+				},
+				"timeoutMs": {
+					"type": "number",
+					"default": 60000,
+					"description": "Per-call STT timeout in ms. Replaces $PI_TELEGRAM_STT_TIMEOUT_MS. Bump for long voice notes on slow GPUs.",
+					"examples": [30000, 60000, 120000]
+				}
+			}
+		}
+	}
+}

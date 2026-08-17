@@ -250,6 +250,8 @@ The companion extension has its own settings file. It lives at:
 
 where `~` is the agent's data dir (whatever `getAgentDir()` returns at runtime, or `$PI_CODING_AGENT_DIR` if set). This matches the agent dir's "one JSON per concern" convention — `telegram.json`, `settings.json`, `mcp.json`, etc. The companion file is a sibling of `telegram.json`.
 
+The file is **self-describing** (v0.9.0+): it includes a `$schema` field pointing to a JSON Schema at <https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json>, so editors (VS Code, IntelliJ) will surface inline descriptions, allowed values, and defaults while you edit. A `_hint` field at the top of the file is the at-a-glance pointer to the schema for humans inspecting the file with `cat`. The schema file also lives in the npm package at `node_modules/pi-voice-telegram/pi-voice-telegram.schema.json` for offline access.
+
 **Per-agent, not global.** If you run multiple agent instances (e.g. `pi-cluster`'s `agent-john` and `agent-jane`), each one has its own `pi-voice-telegram.json` in its own runtime dir. For the `pi-cluster` deploy, that's:
 
 - `agent-john` → `/home/john/pi-cluster/runtimes/agent-john/.pi/agent/pi-voice-telegram.json`
@@ -267,6 +269,8 @@ The seed is **idempotent and safe**:
 - A malformed JSON file is kept intact, not silently overwritten. The extension's defaults apply; the operator sees the same content they had before.
 
 To enable tools after the seed, edit the file (flip `tools.enabled` to `true`) and restart the session. See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a copy-paste-ready file with tools enabled.
+
+The auto-seeded file includes the same fields as `examples/pi-voice-telegram.json` (modulo the `tools.enabled` value). The two should be byte-equal; a sync-drift bug is recorded in PLAN.md as a v0.8.0 maintenance lesson.
 
 ```json
 {

@@ -41,6 +41,20 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** Raw config shape — every field is optional. */
 export interface CompanionConfig {
+	/**
+	 * Optional JSON Schema reference for editor support. Most modern
+	 * editors (VS Code, IntelliJ) use this for inline hints,
+	 * validation, and autocomplete. The extension itself ignores it.
+	 * Conventionally a URL (HTTP or local file://) to a `.schema.json`.
+	 */
+	$schema?: string;
+	/**
+	 * Optional free-form hint. The extension never reads this; it's a
+	 * place for an at-a-glance reminder (e.g. "see README.md for
+	 * docs, restart after editing"). Useful for humans and LLMs that
+	 * inspect the file directly.
+	 */
+	_hint?: string;
 	/** Inbound voice/audio echo. Default: enabled. */
 	inbound?: {
 		/**
@@ -167,16 +181,26 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  * the hardcoded fallbacks (writing them doesn't change behavior), but
  * the file becomes self-documenting.
  *
+ * v0.9.0+: the seeded file also includes `_hint` and `$schema` fields
+ * so it's discoverable in editors (which use `$schema` for inline
+ * validation + hints) and in `cat` output (where the `_hint` string
+ * is the first thing the operator sees). The `_hint` is a free-form
+ * pointer to the docs; the `$schema` is the canonical machine-readable
+ * spec at `pi-voice-telegram.schema.json` in the npm package.
+ *
  * MAINTENANCE: when adding a new knob to the schema, also update:
  *   1. `CompanionConfig` interface (this file)
  *   2. `TTS_FALLBACKS` / `STT_FALLBACKS` constants (if a hardcoded default exists)
  *   3. `resolveTtsDefaults` / `resolveSttDefaults` (if a new env-var fallback exists)
  *   4. `DEFAULT_CONFIG` below (so auto-seed produces a complete file)
  *   5. `examples/pi-voice-telegram.json` (so the copy-paste example is current)
- *   6. README.md settings table
- *   7. PLAN.md knobs table
+ *   6. `pi-voice-telegram.schema.json` (the machine-readable spec)
+ *   7. README.md settings table
+ *   8. PLAN.md knobs table
  */
-const DEFAULT_CONFIG: CompanionConfig = {
+const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
+	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
+	_hint: "pi-voice-telegram companion settings (v0.9.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect.",
 	inbound: { echoEnabled: true },
 	tools: {
 		enabled: false,
