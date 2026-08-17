@@ -173,9 +173,9 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 - A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang/defaults). Useful for debugging without a restart.
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
 
-## Test matrix (v0.6.0+v0.7.0 verification)
+## Test matrix (v0.6.0+v0.7.0+v0.8.0 verification)
 
-All 6 knobs verified against `pi-agent-john` on 2026-08-17:
+All 6 original knobs verified against `pi-agent-john` on 2026-08-17:
 
 | # | Knob | Value tested | Probe | Result |
 |---|---|---|---|---|
@@ -183,8 +183,42 @@ All 6 knobs verified against `pi-agent-john` on 2026-08-17:
 | 2 | `tools.enabled` | `false` | "what voice tools do you have?" | Pass — agent listed no voice tools |
 | 3 | `tools.tts.enabled` | `false` | same | Pass — only `transcribe_audio` listed |
 | 4 | `tools.stt.enabled` | `false` | same | Pass — only `synthesize_voice` listed |
-| 5 | `tools.tts.name` | `tts_cantonese` | same | Pass with caveat — function name renamed, but prompt-text strings still say "synthesize_voice" (LLM worked around) |
-| 6 | `tools.stt.name` | `transcribe_yue` | same | Pass with caveat — same as #5 |
+| 5 | `tools.tts.name` | `tts_cantonese` | same | Pass with caveat (v0.7.0) — function name renamed, but prompt-text strings still said "synthesize_voice" (LLM worked around) |
+| 6 | `tools.stt.name` | `transcribe_yue` | same | Pass with caveat (v0.7.0) — same as #5 |
+
+v0.8.0 added 3 tests:
+
+| # | Knob / behavior | Config | Result |
+|---|---|---|---|
+| 7 | Env-var fallback | No `tts.*` / `stt.*` in JSON, no env vars | Pass — agent reports hardcoded defaults (`Cantonese_PlayfulMan`, `Chinese,Yue`, `speech-2.8-hd`, `yue`, `http://127.0.0.1:8080`) |
+| 8 | JSON overrides hardcoded | `tts.lang: "Japanese"`, `stt.lang: "en"` | Pass — agent reports `Default lang: Japanese` for `synthesize_voice` |
+| 9 | Name templating (round-5/6 fix) | `tools.tts.name: "tts_yue"` + `tts.lang: "ja"` | Pass — agent's response uses `tts_yue` throughout, zero `synthesize_voice` references |
+
+## Maintenance checklist for adding new knobs
+
+When adding a new knob to `pi-voice-telegram.json`, update **all seven** of the following:
+
+1. **`CompanionConfig` interface** in `config.ts` — add the field to the schema (with JSDoc explaining the env-var fallback, if any).
+2. **`TTS_FALLBACKS` / `STT_FALLBACKS` constants** in `config.ts` — if the knob has a hardcoded default. Use these in `DEFAULT_CONFIG` so the auto-seed writes a complete file.
+3. **`resolveTtsDefaults` / `resolveSttDefaults`** in `config.ts` — if the knob has an env-var fallback. JSON > env > hardcoded layering.
+4. **`DEFAULT_CONFIG`** in `config.ts` — the auto-seed reads this when the file is missing. Keep it in sync so a fresh install produces a complete file (the v0.8.0 oversight: this was stale at v0.7.0 values until 2026-08-17).
+5. **`examples/pi-voice-telegram.json`** — the copy-paste example. Must match `DEFAULT_CONFIG` byte-for-byte (verified via `diff`). v0.8.0 used tabs; auto-seed uses 2-space indent. Aligned to 2-space.
+6. **README.md settings table** — the `| key | default | description |` rows.
+7. **PLAN.md knobs table** — the test-matrix "Open design questions" or "v0.x.x+ candidates" sections.
+
+A pre-commit hook could verify (5) byte-equal with the auto-seed output, but that's deferred. For now, when adding a knob, run this to verify:
+
+```bash
+# After updating DEFAULT_CONFIG, redeploy and trigger auto-seed in a throwaway dir
+rm /tmp/test-pi-voice-telegram.json
+node -e "
+  const { loadCompanionConfig } = await import('./index.ts');
+  // Or just compare the example file with what you'd write
+" 2>&1
+diff examples/pi-voice-telegram.json /tmp/test-pi-voice-telegram.json && echo "✓ in sync" || echo "✗ OUT OF SYNC"
+```
+
+Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the file and restarting. The seeded content should be byte-equal with `examples/pi-voice-telegram.json` (modulo `tools.enabled`, which the example sets to `false` for safety).
 
 ## What this extension does NOT do
 
@@ -208,4 +242,4 @@ All 6 knobs verified against `pi-agent-john` on 2026-08-17:
 - **v0.5.0** — `echo.ts` consolidated; `clearTranscriptCache` exports; per-session transcript cache.
 - **v0.6.0** — companion settings file + LLM tool surface (`synthesize_voice`, `transcribe_audio`).
 - **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file. 6-knob test matrix completed against `pi-agent-john`.
-- **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`.
+- **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`. Auto-seeded `DEFAULT_CONFIG` and `examples/pi-voice-telegram.json` brought up to date.

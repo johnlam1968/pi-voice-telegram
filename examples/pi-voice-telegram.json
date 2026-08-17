@@ -1,16 +1,27 @@
 {
-	"inbound": {
-		"echoEnabled": true
-	},
-	"tools": {
-		"enabled": false,
-		"tts": {
-			"enabled": true,
-			"name": "synthesize_voice"
-		},
-		"stt": {
-			"enabled": true,
-			"name": "transcribe_audio"
-		}
-	}
+  "inbound": {
+    "echoEnabled": true
+  },
+  "tools": {
+    "enabled": false,
+    "tts": {
+      "enabled": true,
+      "name": "synthesize_voice"
+    },
+    "stt": {
+      "enabled": true,
+      "name": "transcribe_audio"
+    }
+  },
+  "tts": {
+    "voice": "Cantonese_PlayfulMan",
+    "lang": "Chinese,Yue",
+    "model": "speech-2.8-hd",
+    "timeoutMs": 30000
+  },
+  "stt": {
+    "lang": "yue",
+    "baseUrl": "http://127.0.0.1:8080",
+    "timeoutMs": 60000
+  }
 }

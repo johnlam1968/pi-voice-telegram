@@ -158,6 +158,23 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  * TTS/STT defaults). Written to disk on first run when the file is
  * missing. Safe: an operator who doesn't edit the file gets the same
  * experience as before the upgrade.
+ *
+ * The `tts.*` and `stt.*` fields are included with the same hardcoded
+ * values that `resolveTtsDefaults(undefined)` / `resolveSttDefaults(undefined)`
+ * would produce, so the seeded file is a complete reference of every
+ * knob the extension knows about. Operators can read the file, see
+ * what's available, and edit any field. The fields are redundant with
+ * the hardcoded fallbacks (writing them doesn't change behavior), but
+ * the file becomes self-documenting.
+ *
+ * MAINTENANCE: when adding a new knob to the schema, also update:
+ *   1. `CompanionConfig` interface (this file)
+ *   2. `TTS_FALLBACKS` / `STT_FALLBACKS` constants (if a hardcoded default exists)
+ *   3. `resolveTtsDefaults` / `resolveSttDefaults` (if a new env-var fallback exists)
+ *   4. `DEFAULT_CONFIG` below (so auto-seed produces a complete file)
+ *   5. `examples/pi-voice-telegram.json` (so the copy-paste example is current)
+ *   6. README.md settings table
+ *   7. PLAN.md knobs table
  */
 const DEFAULT_CONFIG: CompanionConfig = {
 	inbound: { echoEnabled: true },
@@ -165,6 +182,17 @@ const DEFAULT_CONFIG: CompanionConfig = {
 		enabled: false,
 		tts: { enabled: true, name: "synthesize_voice" },
 		stt: { enabled: true, name: "transcribe_audio" },
+	},
+	tts: {
+		voice: TTS_FALLBACKS.voice,
+		lang: TTS_FALLBACKS.lang,
+		model: TTS_FALLBACKS.model,
+		timeoutMs: TTS_FALLBACKS.timeoutMs,
+	},
+	stt: {
+		lang: STT_FALLBACKS.lang,
+		baseUrl: STT_FALLBACKS.baseUrl,
+		timeoutMs: STT_FALLBACKS.timeoutMs,
 	},
 };
 
