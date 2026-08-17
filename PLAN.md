@@ -129,12 +129,45 @@ The auto-seed is a UX improvement, not a behavior change: operators who don't to
 
 ## v0.7.0+ candidates
 
+### From the v0.7.0 knob test matrix (verified all 6 knobs work; discovered these gaps)
+
+- **Move per-extension TTS/STT defaults into the settings file** (real gap from operator feedback). Currently in env vars; should be JSON-configurable:
+  - `tts.voice` (default `Cantonese_PlayfulMan`; replaces `PI_MM_TTS_VOICE`)
+  - `tts.lang` (default `Chinese,Yue`; replaces `PI_MM_TTS_LANG`)
+  - `tts.model` (default `speech-2.8-hd`; replaces `PI_MM_TTS_MODEL`)
+  - `tts.timeoutMs` (default `30000`; replaces `PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS`)
+  - `stt.lang` (default `yue`; replaces `PI_TELEGRAM_LANG`)
+  - `stt.baseUrl` (default `http://127.0.0.1:8080`; replaces `WHISPER_SERVER_URL`)
+  - `stt.timeoutMs` (default `60000`; replaces `PI_TELEGRAM_STT_TIMEOUT_MS`)
+
+  Env vars should still be respected as lower-priority fallbacks (so the existing docker-compose.yaml doesn't need updating), but the JSON should win when present.
+
+- **Template the prompt text against the configured tool name** (real bug from rounds 5–6 of the matrix). Currently `description`, `promptSnippet`, and `promptGuidelines` in `tools.ts` hardcode "synthesize_voice" / "transcribe_audio" as string literals. When the operator renames the tool via `tools.tts.name: "tts_cantonese"`, the function name is renamed but the description still says "synthesize_voice". The LLM notices the inconsistency and works around it, but it's a real bug. v0.8+ should template all prompt text against the resolved name.
+
+- **Agent-modifies-config opt-in** (operator suggestion). Allow the LLM to read and write `pi-voice-telegram.json` via a tool, gated on a `writable: true` flag. Trade-off: more agent autonomy vs risk of accidental destructive edits. Default off.
+
+- **Hot-reload the config** (operator suggestion). `fs.watch(pi-voice-telegram.json)` in `config.ts`, re-register tools + handlers on change. Currently any config change requires a session restart because registrations happen on `session_start`. Real UX win for the operator.
+
+### Other v0.7.0+ candidates (from earlier design discussion)
+
 - Adaptive `promptGuidelines` based on `voice.replyMode` (item 1).
 - One-step TTS delivery if the bridge exposes a `sendTelegramVoice` primitive (item 2).
 - `inbound.echoTemplate` (item 4).
-- `stt.lang` and `tts.*` defaults in the settings file (items 3, 5).
 - A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang defaults). Useful for debugging without a restart.
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
+
+## Test matrix (v0.6.0+v0.7.0 verification)
+
+All 6 knobs verified against `pi-agent-john` on 2026-08-17:
+
+| # | Knob | Value tested | Probe | Result |
+|---|---|---|---|---|
+| 1 | `inbound.echoEnabled` | `false` | voice message | Pass — no `🎙️` echo; agent recovered via `transcribe_audio` tool (self-aware, didn't double-transcribe) |
+| 2 | `tools.enabled` | `false` | "what voice tools do you have?" | Pass — agent listed no voice tools |
+| 3 | `tools.tts.enabled` | `false` | same | Pass — only `transcribe_audio` listed |
+| 4 | `tools.stt.enabled` | `false` | same | Pass — only `synthesize_voice` listed |
+| 5 | `tools.tts.name` | `tts_cantonese` | same | Pass with caveat — function name renamed, but prompt-text strings still say "synthesize_voice" (LLM worked around) |
+| 6 | `tools.stt.name` | `transcribe_yue` | same | Pass with caveat — same as #5 |
 
 ## What this extension does NOT do
 
@@ -157,4 +190,4 @@ The auto-seed is a UX improvement, not a behavior change: operators who don't to
 - **v0.4.0** — README + INSTALL docs updated to reflect in-process pipelines.
 - **v0.5.0** — `echo.ts` consolidated; `clearTranscriptCache` exports; per-session transcript cache.
 - **v0.6.0** — companion settings file + LLM tool surface (`synthesize_voice`, `transcribe_audio`).
-- **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file.
+- **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file. 6-knob test matrix completed against `pi-agent-john`.
