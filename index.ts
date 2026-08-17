@@ -44,6 +44,13 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.7.0: auto-seed a default `~/.pi/agent/pi-voice-telegram.json` on
+ *         first run (when missing). The seeded default matches v0.5.0
+ *         behavior (echo on, tools off), so the file appearing is a
+ *         no-op for behavior. Idempotent — existing files are never
+ *         overwritten. v0.6.0 was the first release with the tool
+ *         surface; v0.7.0 makes the settings file discoverable by
+ *         operators who upgrade.
  * v0.6.0: added the LLM tool surface (`synthesize_voice`,
  *         `transcribe_audio`) gated on `tools.enabled` in the companion
  *         settings file. The bridge-driven TTS and inbound echo paths
