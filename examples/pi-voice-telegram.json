@@ -1,0 +1,16 @@
+{
+	"inbound": {
+		"echoEnabled": true
+	},
+	"tools": {
+		"enabled": false,
+		"tts": {
+			"enabled": true,
+			"name": "synthesize_voice"
+		},
+		"stt": {
+			"enabled": true,
+			"name": "transcribe_audio"
+		}
+	}
+}

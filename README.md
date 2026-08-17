@@ -2,10 +2,13 @@
 
 A Telegram voice/text companion extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono) and the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge.
 
-The extension provides two capabilities. The bridge's `telegram.json` decides when and how they fire:
+The extension provides three capabilities. The bridge's `telegram.json` decides when and how the first two fire; the companion's own `~/.pi/agent/pi-voice-telegram.json` opts in to the third.
 
 1. **Outbound TTS** — registers a voice synthesis provider on the bridge. The bridge calls it when `voice.replyMode` says so. The provider returns `{ audioPath, transcriptText }` when `voice.sendTranscript: true` (voice bubble with caption) or just the `oggPath` when `false` (voice bubble only).
-2. **Inbound echo** — registers a raw update handler that detects voice / audio messages, runs the configured STT client (`whisper-stt.ts` → `whisper-server`), and sends the user a `🎙️ "<i>transcript</i>"` reply. A programmatic inbound handler feeds the same transcript into the agent prompt.
+2. **Inbound echo** — registers a raw update handler that detects voice / audio messages, runs the configured STT client (`whisper-stt.ts` → `whisper-server`), and sends the user a `🎙️ "<i>transcript</i>"` reply. A programmatic inbound handler feeds the same transcript into the agent prompt. On by default; turn off via `inbound.echoEnabled: false` in the companion settings file.
+3. **LLM tool surface (v0.6.0+, opt-in)** — when `tools.enabled: true` in the companion settings file, registers two additional tools the agent can call explicitly:
+   - `synthesize_voice` — wraps `voice-reply.ts` + `mm-tts.ts`. Writes a Telegram-ready OGG/Opus file and returns the path. The agent delivers it to the bound chat using the bridge's `telegram_attach` tool. Useful when `voice.replyMode` is `hidden` and the user has asked for a voice reply, or for ad-hoc voice (e.g. reading a file aloud).
+   - `transcribe_audio` — wraps `whisper-stt.transcribe()`. Transcribes a local audio file via `whisper-server` and returns the transcript text.
 
 The extension does not impose any UX policy of its own. Whatever the operator sets in `telegram.json` (or via the bridge's settings UI) is what the user gets.
 
@@ -237,6 +240,57 @@ The extension is fully config-driven. Two voice keys matter:
 
 You can also set the legacy `outboundHandlers[type: "voice"]` block to provide per-handler voice/lang defaults. The provider falls back to those when no bridge-supplied options are present.
 
+## Optional `pi-voice-telegram.json`
+
+The companion extension has its own settings file. It lives at:
+
+```
+~/.pi/agent/pi-voice-telegram.json
+```
+
+where `~` is the agent's data dir (whatever `getAgentDir()` returns at runtime, or `$PI_CODING_AGENT_DIR` if set). This matches the agent dir's "one JSON per concern" convention — `telegram.json`, `settings.json`, `mcp.json`, etc. The companion file is a sibling of `telegram.json`.
+
+**Per-agent, not global.** If you run multiple agent instances (e.g. `pi-cluster`'s `agent-john` and `agent-jane`), each one has its own `pi-voice-telegram.json` in its own runtime dir. For the `pi-cluster` deploy, that's:
+
+- `agent-john` → `/home/john/pi-cluster/runtimes/agent-john/.pi/agent/pi-voice-telegram.json`
+- `agent-jane` → `/home/john/pi-cluster/runtimes/agent-jane/.pi/agent/pi-voice-telegram.json`
+
+**Absent or invalid file = default behavior (echo on, no tools).** The file is opt-in and not auto-seeded. To install:
+
+```bash
+# From the agent runtime dir (where telegram.json lives):
+cp <pi-voice-telegram-repo>/examples/pi-voice-telegram.json ./pi-voice-telegram.json
+# Then edit and flip "tools.enabled" to true to opt in.
+```
+
+See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a starting point.
+
+```json
+{
+  "inbound": { "echoEnabled": true },
+  "tools": {
+    "enabled": false,
+    "tts":  { "enabled": true, "name": "synthesize_voice" },
+    "stt":  { "enabled": true, "name": "transcribe_audio" }
+  }
+}
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `inbound.echoEnabled` | `true` | When `false`, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the `🎙️` confirmation. |
+| `tools.enabled` | `false` | Master switch for LLM tool registration. When `false`, neither `synthesize_voice` nor `transcribe_audio` is registered, regardless of the per-tool flags. |
+| `tools.tts.enabled` | `true` | Register `synthesize_voice`. Honored only when `tools.enabled` is `true`. |
+| `tools.tts.name` | `synthesize_voice` | Override the tool name (rare; for namespace collision avoidance). |
+| `tools.stt.enabled` | `true` | Register `transcribe_audio`. Honored only when `tools.enabled` is `true`. |
+| `tools.stt.name` | `transcribe_audio` | Override the tool name. |
+
+The `synthesize_voice` tool only writes the OGG/Opus file — the agent delivers it using the bridge's `telegram_attach` tool (`@llblab/pi-telegram` registers this; no companion-side wiring needed). The two-step pattern keeps chat-target resolution, captioning, and multipart-upload concerns in the bridge.
+
+Settings are read once per `session_start`. Reload via session restart (or `/reload` if the host agent supports it).
+
+See [`PLAN.md`](./PLAN.md) for the design discussion, open questions, and roadmap.
+
 ## Public API surface
 
 | Hook | What pi-voice-telegram registers |
@@ -244,6 +298,8 @@ You can also set the legacy `outboundHandlers[type: "voice"]` block to provide p
 | `registerTelegramVoiceSynthesisProvider` (from `@llblab/pi-telegram/voice`) | mm-tts-backed TTS provider. ID: `pi-voice-telegram/tts`. Returns either `oggPath` (string) or `{ audioPath, transcriptText }` depending on `voice.sendTranscript`. |
 | `registerTelegramUpdateHandler` (from `@llblab/pi-telegram/updates`) | Echo handler. Detects incoming voice / audio, runs STT, sends the `🎙️` reply, caches the transcript by file name. |
 | `registerTelegramInboundHandler` (from `@llblab/pi-telegram/inbound`) | Reads the cached transcript and returns it so the agent prompt sees the same text the user saw in the echo. |
+| `pi.registerTool` (from `@earendil-works/pi-coding-agent`) — `synthesize_voice` (v0.6.0+, opt-in) | Wraps `voice-reply.ts`. Writes an OGG/Opus file and returns the path. Pair with the bridge's `telegram_attach` to deliver. |
+| `pi.registerTool` (from `@earendil-works/pi-coding-agent`) — `transcribe_audio` (v0.6.0+, opt-in) | Wraps `whisper-stt.transcribe()`. Returns the transcript text for a local audio file. |
 
 ## Environment variables
 
