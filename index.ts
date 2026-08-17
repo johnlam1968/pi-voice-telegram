@@ -44,6 +44,21 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.14.0: hot-reload. The companion settings file is now
+ *         watched via `fs.watch`; any external edit (operator
+ *         `vi`/editor, the LLM's own `pi_voice_telegram_config_write`
+ *         call, an MCP-driven automation) triggers a debounced
+ *         reconfigure — the previous registration set is disposed
+ *         and a fresh one is built from the new file contents. The
+ *         synthesis provider is re-created (so new TTS defaults
+ *         apply on the next bridge event), the echo handlers are
+ *         re-registered per the new `inbound.echoEnabled`, and the
+ *         six LLM tools are re-registered per the new `tools.*`
+ *         flags. Hot-reload is best-effort: if `fs.watch` fails
+ *         (sandboxed env, no inotify handles, etc.) the
+ *         extension logs a warning and falls back to the
+ *         session_start-only behavior. The watcher is closed on
+ *         `session_shutdown` so no file handles leak.
  * v0.13.0: redesigned the reset tool to be **schema-driven**
  *         instead of overwriting with a hardcoded `DEFAULT_CONFIG`
  *         JSON. `pi_voice_telegram_config_reset` now walks the
@@ -134,6 +149,9 @@
  *     auth sources: `$MINIMAX_API_KEY`, `auth.json`, `~/.mmx/config.json`)
  */
 
+import { existsSync, watch, type FSWatcher } from "node:fs";
+import { dirname, join } from "node:path";
+
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerTelegramVoiceSynthesisProvider } from "@llblab/pi-telegram/voice";
@@ -164,30 +182,54 @@ import {
 
 export default function piVoiceTelegram(pi: ExtensionAPI): void {
 	let disposers: Array<() => void> = [];
+	let configWatcher: FSWatcher | null = null;
+	let reloadTimer: NodeJS.Timeout | null = null;
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
+	const configPath = join(agentDir, "pi-voice-telegram.json");
 
-	pi.on("session_start", () => {
-		// Tear down any prior session's registrations + clear cache.
+	/**
+	 * Tear down all current registrations and re-run the registration
+	 * logic against the current contents of `pi-voice-telegram.json`.
+	 *
+	 * Called from three places:
+	 *   1. `session_start` — initial setup, and on every session restart.
+	 *   2. The fs.watch callback (debounced) — when the file changes
+	 *      mid-session (v0.14.0+ hot-reload).
+	 *   3. (Implicitly) from the previous run's `disposers.forEach(d => d())`
+	 *      at the top of the next call.
+	 *
+	 * What hot-reload re-registers (v0.14.0):
+	 *   - Synthesis provider (always on; uses the latest TTS defaults)
+	 *   - Echo handlers (gated on `inbound.echoEnabled`)
+	 *   - All six LLM tools (gated on `tools.enabled` + sub-flags)
+	 *   - The disposal-then-re-register pattern means previous
+	 *     registrations are removed before new ones go in.
+	 *
+	 * What is NOT hot-reloadable:
+	 *   - The watcher itself (it lives across reconfigures, torn
+	 *     down only on `session_shutdown`).
+	 *   - The `_hint` and `$schema` fields of the file (read-only
+	 *     metadata; no behavior change).
+	 */
+	const reconfigure = (): void => {
+		// Tear down previous registrations + clear the in-memory
+		// transcript cache (the new echoEnabled flag should take
+		// effect on the very next message, with a fresh cache).
 		disposers.forEach((d: () => void) => d());
 		disposers = [];
 		clearTranscriptCache();
 
 		const cfg = loadCompanionConfig();
-		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 
-		// Resolve per-extension TTS/STT defaults once per session. JSON
-		// > env var > hardcoded default. See `config.ts` for the
-		// layering. The synthesis provider gets the TTS defaults; the
-		// tool registrations get both TTS and STT defaults.
+		// Resolve per-extension TTS/STT defaults on every
+		// reconfigure so hot-reload picks up new JSON values.
 		const ttsDefaults = resolveTtsDefaults(cfg);
 		const sttDefaults = resolveSttDefaults(cfg);
 
-		// (1) Outbound TTS — always on. The bridge calls this whenever it
-		// wants a voice reply (driven by voice.replyMode + the LLM's
-		// reply). The provider returns `{ audioPath, transcriptText }`
-		// when telegram.json says `voice.sendTranscript = true`;
-		// otherwise just the oggPath. The provider is built via the
-		// factory so it picks up the resolved TTS defaults from the
-		// companion config (v0.8.0+).
+		// (1) Outbound TTS — always on. The bridge calls this whenever
+		// it wants a voice reply (driven by voice.replyMode + the
+		// LLM's reply). The provider is re-created on every
+		// reconfigure so it picks up the latest resolved defaults.
 		disposers.push(
 			registerTelegramVoiceSynthesisProvider(
 				createMmTtsSynthesisProvider({ tts: ttsDefaults }),
@@ -196,27 +238,14 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		);
 
 		// (2) Inbound echo — default on, opt-out via
-		// `inbound.echoEnabled: false` in the companion settings file.
-		// The bridge's raw update hook fires before the inbound pipeline.
-		// We run STT here, cache the transcript by file name, and send
-		// the 🎙️ echo to the user. The inbound handler below returns
-		// the cached transcript so the agent prompt sees the same text
-		// the user saw.
+		// `inbound.echoEnabled: false`.
 		if (cfg.inbound?.echoEnabled !== false) {
 			disposers.push(registerTelegramUpdateHandler(handleTelegramUpdateForEcho));
 			disposers.push(registerTelegramInboundHandler("voice", handleTelegramInboundForEcho));
 			disposers.push(registerTelegramInboundHandler("audio", handleTelegramInboundForEcho));
 		}
 
-		// (3) LLM tool surface — opt-in via `tools.enabled: true` in
-		// the companion settings file. The TTS/STT tools are gated
-		// individually on `tools.tts.enabled` / `tools.stt.enabled`.
-		// The schema tool, config-read, config-write, and config-reset
-		// are all registered when `tools.enabled` is true. They are
-		// OPERATOR PREFERENCES, not security boundaries — a sufficiently
-		// capable LLM with `bash` + `write` can modify the file
-		// regardless. The real security boundary is the container's
-		// filesystem permissions, not a JSON flag.
+		// (3) LLM tool surface — opt-in via `tools.enabled: true`.
 		if (cfg.tools?.enabled === true) {
 			if (cfg.tools.tts?.enabled !== false) {
 				registerSynthesizeVoiceTool({
@@ -234,27 +263,83 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 					stt: sttDefaults,
 				});
 			}
-			// Documentation + introspection tools. Always on when the
-			// tool surface is on — they're useful regardless of the
-			// TTS/STT flags and have no side effects (or, in the case
-			// of the config tools, well-bounded side effects).
+			// Documentation + introspection + config tools.
 			registerPiVoiceTelegramSchemaTool(pi);
 			registerConfigReadTool(pi);
 			registerConfigWriteTool(pi);
 			registerConfigResetTool(pi);
 		}
 
-		// Suppress unused-variable warnings for sttDefaults — the
-		// synthesis provider doesn't take STT defaults, and the tool
-		// registrations only use sttDefaults when tools.stt.enabled is
-		// true. Keeping the resolve call above so the JSON > env
-		// layering is exercised at startup even when the tools are off.
+		// sttDefaults is used by the STT tool; when tools.stt.enabled
+		// is false, suppress the unused-var warning without
+		// re-introducing the resolve (which is needed to exercise the
+		// JSON > env layering even when tools are off).
 		void sttDefaults;
+	};
+
+	// Start the config file watcher AFTER the first reconfigure.
+	// We watch the DIRECTORY (not the file directly) because
+	// `fs.watch(file)` is unreliable on some Linux filesystems
+	// (Docker overlay, network FS) — it can stop firing after the
+	// first event, especially when editors or `sed -i` use the
+	// rename pattern to replace the file. Watching the directory
+	// catches both in-place writes AND rename-style replacements,
+	// and we filter for events on our specific filename.
+	const startConfigWatcher = (): void => {
+		if (configWatcher) return; // already running
+		if (!existsSync(configPath)) return; // file not present yet
+		const configDir = dirname(configPath);
+		const baseName = configPath.slice(configDir.length + 1);
+		try {
+			configWatcher = watch(
+				configDir,
+				{ persistent: true }, // keep the Node process alive while watching; we close on session_shutdown
+				(_event, filename) => {
+					// Filter for events on our specific file. The
+					// `filename` arg is null on some platforms, in
+					// which case we conservatively reload (could be a
+					// false positive, but the cost of one reconfigure
+					// is small).
+					if (filename !== null && filename !== baseName) return;
+					if (reloadTimer) clearTimeout(reloadTimer);
+					reloadTimer = setTimeout(() => {
+						reloadTimer = null;
+						console.log(
+							`[pi-voice-telegram] Hot-reloading from ${configPath} (file change detected).`,
+						);
+						reconfigure();
+					}, 200);
+				},
+			);
+		} catch (err) {
+			// fs.watch can fail in sandboxed environments (e.g., no inotify
+			// handles, restricted bind mounts). Hot-reload is a UX nicety;
+			// session-start still works, so a graceful fallback is fine.
+			console.log(
+				`[pi-voice-telegram] Hot-reload unavailable: ${(err as Error).message}. ` +
+					`Changes to ${configPath} will take effect on the next session_start.`,
+			);
+		}
+	};
+
+	pi.on("session_start", () => {
+		reconfigure();
+		startConfigWatcher();
 	});
 
 	pi.on("session_shutdown", () => {
+		// Cancel any pending reload (don't fire it after the session is
+		// gone — the `pi` object may be invalidated).
+		if (reloadTimer) {
+			clearTimeout(reloadTimer);
+			reloadTimer = null;
+		}
 		disposers.forEach((d: () => void) => d());
 		disposers = [];
+		if (configWatcher) {
+			configWatcher.close();
+			configWatcher = null;
+		}
 		clearTranscriptCache();
 	});
 }

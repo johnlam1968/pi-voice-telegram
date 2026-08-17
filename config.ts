@@ -218,7 +218,7 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  */
 const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-	_hint: "pi-voice-telegram companion settings (v0.12.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect. To reset to defaults, delete this file and restart — the extension will auto-seed the default config.",
+	_hint: "pi-voice-telegram companion settings (v0.14.2+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. See $schema for the full key reference.",
 	inbound: { echoEnabled: true },
 	tools: {
 		enabled: false,

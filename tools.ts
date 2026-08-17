@@ -336,13 +336,15 @@ const CONFIG_READ_PROMPT = {
 
 const CONFIG_WRITE_PROMPT = {
 	description:
-		"Modify a single key in the pi-voice-telegram companion settings file. The write is schema-validated (refuses unknown keys) and atomic (write-to-tmp + rename). Always reads the current value first, applies the change, and returns both the old and new values in the result. Reminder: changes take effect only after the agent session is restarted — inform the operator.",
-	promptSnippet: "Schema-validated atomic write to the companion settings (single key + value).",
+		"Modify a single key in the pi-voice-telegram companion settings file. The write is schema-validated (refuses unknown keys) and atomic (write-to-tmp + rename). The companion settings file (NOT telegram.json) is where TTS/STT defaults live — tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl. Always reads the current value first, applies the change, and returns both the old and new values in the result. Changes take effect immediately on the next turn (v0.14.0+ hot-reload) — no session restart required.",
+	promptSnippet: "Schema-validated atomic write to the companion settings (TTS/STT defaults live HERE, not in telegram.json).",
 	promptGuidelines: [
-		"Use pi_voice_telegram_config_write when (a) the operator asks you to change a setting (e.g. 'set tts.lang to ja', 'turn off inbound echo'), or (b) you observe a clear mismatch between the current config and the operator's actual usage — for example, the operator keeps asking for English voice while tts.lang is still 'Chinese,Yue', or the operator keeps saying 'speak faster' while the speed is fixed. In case (b), propose the change first and ask before writing, since the operator may have a reason for the current value.",
-		"Always read the current value with pi_voice_telegram_config_read FIRST so you can report old → new. This is the operator's safety net — the write is atomic, but reading first means you can also confirm the diff.",
+		"Use pi_voice_telegram_config_write when the operator asks to change a setting — especially voice/TTS/language settings like 'change tts.lang to ja', 'use English voice', 'switch to a female voice', 'turn off inbound echo'. Don't just talk about the change being possible — actually call the tool. The operator is using the LLM as the interface to the config; talking without acting is a fail mode.",
+		"CRITICAL: TTS/STT settings (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl, etc.) live in THIS file (~/.pi/agent/pi-voice-telegram.json), NOT in telegram.json. The bridge's telegram.json controls the bridge (which chat to use, polling, role-based access). The companion settings control the voice pipeline. If the user asks about voice/TTS/language, this is the right place to look.",
+		"Two flows to choose between: (1) Reactive — operator asks 'set tts.lang to ja' → call config_write with the new value. (2) Proactive — operator keeps asking for English voice while tts.lang is 'Chinese,Yue' → call config_read first to confirm the mismatch, then either propose the change (recommended) or apply it directly if the pattern is clear.",
+		"Always call config_read FIRST when changing a value, so you can report old → new. Two-step (read → write) is the operator's safety net.",
 		"Pass the dotted `key` path and the new `value` (as a JSON value, not a string). The tool will reject writes to `$schema`, `_hint`, or any key not in the schema.",
-		"After a successful write, tell the operator: 'restart the session for this change to take effect.' The extension reads the config once per session_start.",
+		"After a successful write, tell the operator: 'the change takes effect on the next turn (hot-reload is on).' No session restart needed.",
 	],
 };
 
