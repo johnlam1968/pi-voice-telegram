@@ -35,14 +35,15 @@ If you just want to drop the extension into a running agent's npm tree:
 mkdir -p ~/.pi/agent/npm
 cd ~/.pi/agent/npm
 npm init -y
+# `--legacy-peer-deps`: pi-minimax-m3-caching-fix@0.2.0 pins the agent
+# to v0.79.1; the cluster is on v0.84.2. The peer-dep ranges are
+# stricter than reality (no real conflict), so we use npm's legacy
+# resolution to install them side-by-side.
 npm install --legacy-peer-deps \
     @llblab/pi-telegram@0.28.0 \
     pi-mcp-adapter@2.26.0 \
-    pi-minimax-m3-caching-fix@0.2.0
-
-# Clone pi-voice-telegram from this repo into node_modules/
-git clone --depth 1 https://github.com/johnlam1968/pi-voice-telegram.git \
-    ./node_modules/pi-voice-telegram
+    pi-minimax-m3-caching-fix@0.2.0 \
+    pi-voice-telegram
 
 # Register the package in the agent's settings.json
 node -e "
@@ -50,8 +51,9 @@ const fs = require('node:fs');
 const path = process.env.HOME + '/.pi/agent/settings.json';
 const settings = JSON.parse(fs.readFileSync(path, 'utf8'));
 const packages = settings.packages ?? [];
-if (!packages.includes('npm:pi-voice-telegram')) {
-  packages.push('npm:pi-voice-telegram');
+const entry = 'npm:pi-voice-telegram@' + require('pi-voice-telegram/package.json').version;
+if (!packages.includes(entry)) {
+  packages.push(entry);
   settings.packages = packages;
   fs.writeFileSync(path, JSON.stringify(settings, null, 2) + '\n');
 }
