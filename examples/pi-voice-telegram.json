@@ -1,12 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-  "_hint": "pi-voice-telegram companion settings (v0.9.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect.",
+  "_hint": "pi-voice-telegram companion settings (v0.12.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect. To reset to defaults, delete this file and restart — the extension will auto-seed the default config.",
   "inbound": {
     "echoEnabled": true
   },
   "tools": {
     "enabled": false,
-    "writable": false,
     "tts": {
       "enabled": true,
       "name": "synthesize_voice"

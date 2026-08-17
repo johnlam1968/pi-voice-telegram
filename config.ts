@@ -67,17 +67,26 @@ export interface CompanionConfig {
 	};
 	/** LLM tool surface. Default: disabled (opt-in). */
 	tools?: {
-		/** Master switch for tool registration. Default: false. */
-		enabled?: boolean;
 		/**
-		 * Opt-in flag for the LLM's `pi_voice_telegram_config_read`
-		 * and `pi_voice_telegram_config_write` tools (v0.11.0+). When
-		 * true, the LLM can read the current companion settings and
-		 * modify them via the config tool. The read tool is also gated
-		 * on this flag so operators get an explicit "I'm letting the
-		 * LLM see/modify the file" affordance. Default: false.
+		 * Master switch for LLM tool registration. When false, NONE of
+		 * the LLM-callable tools (synthesize_voice, transcribe_audio,
+		 * pi_voice_telegram_schema, pi_voice_telegram_config_read /
+		 * _write / _reset) are registered. When true, they're all
+		 * available.
+		 *
+		 * Note: this is an OPERATOR PREFERENCE (token-cost + ergonomic),
+		 * not a security boundary. A sufficiently capable LLM with
+		 * `bash` + `write` can modify this file regardless of how
+		 * `tools.enabled` is set. The real security boundary is the
+		 * container's filesystem permissions, the bridge's role-based
+		 * access, etc. The settings file is just JSON; the LLM is
+		 * fully capable of editing it via the host's write tool.
+		 *
+		 * Default: false. Set true to opt the LLM into the full tool
+		 * surface (TTS, STT, schema discovery, config introspection,
+		 * config modification, config reset).
 		 */
-		writable?: boolean;
+		enabled?: boolean;
 		/** TTS tool: synthesize_voice. Default: enabled when `tools.enabled` is true. */
 		tts?: {
 			enabled?: boolean;
@@ -209,11 +218,10 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  */
 const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-	_hint: "pi-voice-telegram companion settings (v0.9.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect.",
+	_hint: "pi-voice-telegram companion settings (v0.12.0+). See the schema (linked via $schema) for the full key reference with descriptions + examples. Edit this file and restart the agent session for changes to take effect. To reset to defaults, delete this file and restart — the extension will auto-seed the default config.",
 	inbound: { echoEnabled: true },
 	tools: {
 		enabled: false,
-		writable: false,
 		tts: { enabled: true, name: "synthesize_voice" },
 		stt: { enabled: true, name: "transcribe_audio" },
 	},

@@ -31,13 +31,7 @@
 				"enabled": {
 					"type": "boolean",
 					"default": false,
-					"description": "Master switch for tool registration. When false, neither `synthesize_voice` nor `transcribe_audio` is registered, regardless of the per-tool flags below. When true, the per-tool flags decide which of the two are actually exposed.",
-					"examples": [true, false]
-				},
-				"writable": {
-					"type": "boolean",
-					"default": false,
-					"description": "Opt-in flag for the LLM's `pi_voice_telegram_config_read` and `pi_voice_telegram_config_write` tools (v0.11.0+). When true, the LLM can read the current companion settings and modify them via the config tool. Both read and write are gated on this flag so operators get an explicit \"I'm letting the LLM see/modify the file\" affordance. The write tool does schema-validated atomic writes; it refuses to modify `$schema`, `_hint`, or any key not present in the schema. Default: false (operator deny-by-default).",
+					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false.",
 					"examples": [true, false]
 				},
 				"tts": {

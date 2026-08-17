@@ -35,7 +35,7 @@
  *   - whisper-stt.ts                   → transcribe (STT pipeline)
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -53,6 +53,7 @@ import {
 import {
 	lookupKey as ioLookupKey,
 	readSettings as ioReadSettings,
+	resetConfig as ioResetConfig,
 	writeKey as ioWriteKey,
 } from "./config-io.js";
 
@@ -324,12 +325,12 @@ export function registerPiVoiceTelegramSchemaTool(pi: ExtensionAPI): void {
 
 const CONFIG_READ_PROMPT = {
 	description:
-		"Read the current value(s) of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Without a `key` parameter, returns the full settings object as formatted JSON. With a dotted-path `key` (e.g. 'tts.lang', 'inbound.echoEnabled', 'tools.writable'), returns just that one value. Use this before modifying settings to confirm the current state.",
+		"Read the current value(s) of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Without a `key` parameter, returns the full settings object as formatted JSON. With a dotted-path `key` (e.g. 'tts.lang', 'inbound.echoEnabled', 'tools.enabled'), returns just that one value. Use this to inspect current state before suggesting edits and to confirm that prior writes took effect.",
 	promptSnippet: "Reads the current companion settings (full or per-key).",
 	promptGuidelines: [
-		"Use pi_voice_telegram_config_read to inspect the operator's current settings before suggesting edits. The agent should know what's already set.",
+		"Use pi_voice_telegram_config_read to inspect the operator's current settings before suggesting or applying edits. The agent should know what's already set.",
 		"Pass the `key` parameter for a single value, omit it for the full file. The dotted path uses the same lookup as the schema tool — short form ('tts.voice') works as well as explicit form.",
-		"This tool is only registered when the operator has set `tools.writable: true` in the companion settings. If it's not available, ask the operator to opt in.",
+		"This tool is registered whenever `tools.enabled: true` is set in the companion settings. If it's not available, the operator has the tool surface off — that is the only flag gating these tools.",
 	],
 };
 
@@ -338,7 +339,7 @@ const CONFIG_WRITE_PROMPT = {
 		"Modify a single key in the pi-voice-telegram companion settings file. The write is schema-validated (refuses unknown keys) and atomic (write-to-tmp + rename). Always reads the current value first, applies the change, and returns both the old and new values in the result. Reminder: changes take effect only after the agent session is restarted — inform the operator.",
 	promptSnippet: "Schema-validated atomic write to the companion settings (single key + value).",
 	promptGuidelines: [
-		"Use pi_voice_telegram_config_write when the operator asks you to change a setting (e.g. 'set tts.lang to ja', 'turn on the schema tool').",
+		"Use pi_voice_telegram_config_write when (a) the operator asks you to change a setting (e.g. 'set tts.lang to ja', 'turn off inbound echo'), or (b) you observe a clear mismatch between the current config and the operator's actual usage — for example, the operator keeps asking for English voice while tts.lang is still 'Chinese,Yue', or the operator keeps saying 'speak faster' while the speed is fixed. In case (b), propose the change first and ask before writing, since the operator may have a reason for the current value.",
 		"Always read the current value with pi_voice_telegram_config_read FIRST so you can report old → new. This is the operator's safety net — the write is atomic, but reading first means you can also confirm the diff.",
 		"Pass the dotted `key` path and the new `value` (as a JSON value, not a string). The tool will reject writes to `$schema`, `_hint`, or any key not in the schema.",
 		"After a successful write, tell the operator: 'restart the session for this change to take effect.' The extension reads the config once per session_start.",
@@ -418,6 +419,70 @@ export function registerConfigWriteTool(pi: ExtensionAPI): void {
 					oldValue: result.oldValue,
 					newValue: result.newValue,
 					path: result.path,
+				},
+			};
+		},
+	});
+}
+
+// --- pi_voice_telegram_config_reset (v0.12.0, schema-driven in v0.12.1) ---
+//
+// Schema-driven recovery primitive. Walks the JSON Schema, fills in
+// any missing fields with the schema's `default` value, preserves
+// the operator's existing values. Backs up the current file to
+// `pi-voice-telegram.json.bak.<unix-ms>` first so the operator can
+// `cp` the previous state back if the migration is wrong.
+//
+// The schema is the source of truth for "what fields exist and what
+// are their defaults" — not a hardcoded JSON in source. New fields
+// added in future schema versions are auto-applied to existing files
+// when reset is called.
+
+const CONFIG_RESET_PROMPT = {
+	description:
+		"Schema-driven migration of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Walks the JSON Schema, fills in any MISSING fields with the schema's `default` value, and preserves the operator's existing values. Backs up the current file to a timestamped `.bak.<unix-ms>` before writing, so the previous state is recoverable. Use this to migrate a stale file to a newer schema version, to recover from a bad edit, or to fill in fields the LLM never set. Reminder: changes take effect only after the agent session is restarted — inform the operator.",
+	promptSnippet: "Schema-driven migration of the companion settings (fills missing fields with schema defaults, preserves existing values, timestamped backup).",
+	promptGuidelines: [
+		"Use pi_voice_telegram_config_reset when the operator asks to reset, roll back, fill in missing fields, or migrate the file to the current schema. Especially useful after upgrading the extension (a new schema version may add fields that the existing file doesn't have).",
+		"The tool does NOT take any parameters — it always walks the bundled schema and applies defaults to missing fields. Operator-set values are preserved. The result reports which dotted paths were added (e.g., 'tools.writable', 'stt.timeoutMs').",
+		"After a successful reset, tell the operator: 'restart the session for the reset to take effect. Your previous settings are in ~/.pi/agent/pi-voice-telegram.json.bak.<timestamp>'. If they want to keep their old values, the backup is recoverable via `cp`.",
+	],
+};
+
+export function registerConfigResetTool(pi: ExtensionAPI): void {
+	pi.registerTool({
+		name: "pi_voice_telegram_config_reset",
+		label: "Migrate pi-voice-telegram settings to current schema",
+		description: CONFIG_RESET_PROMPT.description,
+		promptSnippet: CONFIG_RESET_PROMPT.promptSnippet,
+		promptGuidelines: CONFIG_RESET_PROMPT.promptGuidelines,
+		parameters: Type.Object({}), // no parameters
+		async execute(_toolCallId) {
+			const result = ioResetConfig();
+			const addedSummary = result.added.length
+				? `\nFields added (from schema defaults): ${result.added.join(", ")}.`
+				: "\nNo missing fields — file was already up to date with the schema.";
+			return {
+				content: [
+					{
+						type: "text",
+						text:
+							`Migrated ${result.path}.` +
+							addedSummary +
+							(result.backupPath
+								? `\nPrevious content backed up to: ${result.backupPath}\n`
+								: "\nNo previous file to back up.\n") +
+							`\nRestart the agent session for the migration to take effect. ` +
+							(result.backupPath
+								? `To recover the previous settings: cp ${result.backupPath} ${result.path}`
+								: "There was no previous content."),
+					},
+				],
+				details: {
+					path: result.path,
+					backupPath: result.backupPath,
+					added: result.added,
+					hadPrevious: Boolean(result.backupPath),
 				},
 			};
 		},

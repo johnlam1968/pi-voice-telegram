@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.11.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write tools).
+**Status:** v0.13.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution.
 
 ## What this is
 
@@ -187,7 +187,7 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 
 **Bug fixed during testing:** the first version of the walker only did `obj[seg]`, so the agent's first attempt with `key: "tts"` failed with "key path 'tts' not found". Added the `obj.properties[seg]` fallback so short form works as the agent expected. Fixed and re-deployed in the same commit cycle.
 
-## v0.11.0 — agent-modifies-config opt-in (shipped)
+## v0.11.0 — agent-modifies-config opt-in (shipped, superseded by v0.12.0)
 
 **Why:** the v0.10.0 schema tool gave the LLM a way to discover what knobs exist, but no way to actually modify them. Operators who wanted the LLM to manage the file end-to-end (e.g. "set tts.lang to ja") had to make the edit themselves. v0.11.0 closes the loop with a double opt-in: the operator must set `tools.writable: true` in addition to `tools.enabled: true`. The LLM then gets two more tools, one to read current state and one to make schema-validated atomic writes.
 
@@ -219,6 +219,53 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 | 3 | `tools.writable: true` | "set tts.lang to ja" | Pass (with a real bug found and fixed mid-test) — agent called read first (per the promptGuidelines), then schema, then write. File's `tts.lang` was updated, no stray top-level `lang` key. The LLM mapped "ja" → "Japanese" based on the schema's `examples` list — a feature, not a bug. |
 
 **Bug found and fixed during testing:** the first version of `writeKey` called `setNestedPath(current, remainder, value)` — passing the top-level object, not the root's child. This created the new key at the wrong level (top-level `lang` instead of `tts.lang`). Caught by the live test when I `cat`-ed the file and saw a stray `"lang": "ja"` at the top level. Fixed by descending into the root before calling `setNestedPath`. Re-deployed in the same commit cycle.
+
+## v0.12.0 — drop fake-security `writable` flag, add recovery primitive (shipped)
+
+**Why:** the v0.11.0 `tools.writable` flag was operator-preference dressed up as a security boundary. A sufficiently capable LLM with `bash` + `write` can edit the file regardless of what a JSON flag says. The real security boundary is the container's filesystem permissions, the bridge's role-based access, and the operator's review of LLM outputs — not a flag in a config file the LLM can also see. v0.12.0:
+
+1. Removes the `tools.writable` opt-in. The config-read / config-write tools are now registered whenever `tools.enabled` is true (no double opt-in).
+2. Adds a recovery primitive: `pi_voice_telegram_config_reset`. Backs up the current file to a timestamped `.bak.<unix-ms>` and writes the bundled `DEFAULT_CONFIG` over it.
+
+**What shipped:**
+
+- Removed `tools.writable` from `CompanionConfig`, `pi-voice-telegram.schema.json`, `DEFAULT_CONFIG`, and `examples/pi-voice-telegram.json`.
+- New tool `registerConfigResetTool(pi)` in `tools.ts`. Parameter-less. Returns the backup path + a success message.
+- `config-io.ts` `resetConfig(defaultContent)` — atomic write + backup.
+- `index.ts` registers config-read / config-write / config-reset together when `tools.enabled` is true.
+- `package.json` — bumped to v0.12.0.
+
+**Note:** v0.12.0's reset tool used a hardcoded `DEFAULT_CONFIG` JSON in source. That's the wrong design — the schema is the source of truth for "what fields exist and what their defaults are". v0.13.0 refactors the reset to be schema-driven.
+
+## v0.13.0 — schema-driven reset + proactive evolution (shipped)
+
+**Why:** v0.12.0's reset overwrote the file with a hardcoded JSON in source. That has two problems:
+
+1. The hardcoded JSON can drift from the schema (the canonical source of truth for "what fields exist and what their defaults are"). When the schema adds a new field, the hardcoded JSON doesn't know about it.
+2. The reset is destructive — it overwrites the operator's values, not just fills in missing ones. The user pointed out: "resetconfig means spawn setting using the schema default" — the reset should be additive, not destructive.
+
+v0.13.0 redesigns the reset to walk the JSON Schema, fill in MISSING fields with the schema's `default` value, and preserve the operator's existing values. The schema is the source of truth; the hardcoded JSON is for first-install auto-seed only.
+
+Also: the user pointed out that the LLM should be able to **evolve the config from observed usage** — when the operator keeps asking for English voice and the config is `Chinese,Yue`, the LLM should propose or apply a change. v0.13.0 updates the config tool `promptGuidelines` to encourage this workflow.
+
+**What shipped:**
+
+- `config-io.ts` extended with `mergeWithSchemaDefaults(schema, current)` — recursive walk of the schema. Three cases for a missing key:
+  1. Schema has a top-level `default` value → use it.
+  2. Schema defines an object with nested properties that have defaults → recurse with empty current, build the nested object from sub-defaults.
+  3. Neither → skip (no schema info).
+- `resetConfig()` now takes no args, reads the schema from the npm package, calls `mergeWithSchemaDefaults`, and writes the result atomically with backup.
+- `tools.ts` `registerConfigResetTool` updated to call the new `resetConfig()` and report the list of added paths to the LLM (for the agent to relay to the user).
+- Config tool `promptGuidelines` updated: "Use pi_voice_telegram_config_write when (a) the operator asks you to change a setting, or (b) you observe a clear mismatch between the current config and the operator's actual usage. In case (b), propose the change first and ask before writing."
+- `package.json` — bumped to v0.13.0.
+
+**Bug found and fixed during testing:** the first version of `mergeWithSchemaDefaults` only added missing fields when the schema had a top-level `default` value. It skipped object properties (like `inbound` and top-level `stt`) because they don't have a top-level default in the schema — they have NESTED defaults. The first test run only added `tools.stt.name`; `inbound` and the per-extension `stt` were still missing. Fixed by adding Case 2 (recurse into object properties even when current is undefined) to the merge function. Re-deployed in the same commit cycle.
+
+**Tested on `pi-agent-john` on 2026-08-17:**
+
+| # | Probe | Result |
+|---|---|---|
+| 1 | "run config_reset" on a partial file (missing inbound, stt.name, tts.lang, tts.model, tts.timeoutMs, stt.lang, stt.baseUrl, stt.timeoutMs) | Pass — all 8 missing fields filled in from schema defaults. Existing values preserved (tts.voice: "Cantonese_PlayfulMan", tools.tts.name: "synthesize_voice", operator's custom _hint). Backup file created. Agent reported all 8 paths to the user in Cantonese. |
 
 ## Open design questions (deferred from v0.6.0)
 
@@ -323,3 +370,5 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.9.0** — self-describing settings file. `pi-voice-telegram.schema.json` (JSON Schema with descriptions/examples for every key) shipped in the repo; `$schema` + `_hint` fields added to the seeded file. Editors and LLMs get inline hints; humans get an at-a-glance pointer in `cat` output.
 - **v0.10.0** — `pi_voice_telegram_schema` tool. The LLM can now call a tool that returns the companion settings schema as text (full or per-key). Useful for the agent-modifies-config feature (planned v0.11+).
 - **v0.11.0** — agent-modifies-config opt-in. New `tools.writable: true` flag enables two more tools (`pi_voice_telegram_config_read` / `_write`). Schema-validated, atomic, refuses `$schema` / `_hint` / unknown keys. 3 tests passed against `pi-agent-john`; one real bug found and fixed mid-test.
+- **v0.12.0** — drop fake-security `tools.writable` flag. Add a recovery primitive (`pi_voice_telegram_config_reset`) that backs up the current file and overwrites with a hardcoded `DEFAULT_CONFIG`. The user pointed out the writable flag was operator-preference dressed up as a security boundary; the real boundary is the container's filesystem permissions, not a JSON flag.
+- **v0.13.0** — schema-driven reset + proactive evolution. Redesigned `resetConfig` to walk the JSON Schema, fill in MISSING fields with the schema's `default` value, preserve the operator's existing values. Updated the config tool promptGuidelines to encourage the LLM to evolve the config based on observed usage patterns. The schema is now the source of truth for "what fields exist and what their defaults are"; the hardcoded JSON is for first-install auto-seed only.
