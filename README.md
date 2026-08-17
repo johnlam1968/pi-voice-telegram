@@ -255,15 +255,18 @@ where `~` is the agent's data dir (whatever `getAgentDir()` returns at runtime, 
 - `agent-john` → `/home/john/pi-cluster/runtimes/agent-john/.pi/agent/pi-voice-telegram.json`
 - `agent-jane` → `/home/john/pi-cluster/runtimes/agent-jane/.pi/agent/pi-voice-telegram.json`
 
-**Absent or invalid file = default behavior (echo on, no tools).** The file is opt-in and not auto-seeded. To install:
+**v0.7.0+: auto-seeded on first run.** When the file is missing, the extension writes a safe default (echo on, tools off — same as v0.5.0 behavior) on `session_start`. The seed is logged once to the agent's stdout:
 
-```bash
-# From the agent runtime dir (where telegram.json lives):
-cp <pi-voice-telegram-repo>/examples/pi-voice-telegram.json ./pi-voice-telegram.json
-# Then edit and flip "tools.enabled" to true to opt in.
+```
+[pi-voice-telegram] Seeded default config at /home/pi/.pi/agent/pi-voice-telegram.json (echo: on, tools: off). Edit and restart to enable tools.
 ```
 
-See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a starting point.
+The seed is **idempotent and safe**:
+- Only fires when the file is absent (ENOENT). Existing files are never overwritten.
+- If the write fails (read-only FS, permission denied), the extension's in-memory defaults still apply — no behavior change.
+- A malformed JSON file is kept intact, not silently overwritten. The extension's defaults apply; the operator sees the same content they had before.
+
+To enable tools after the seed, edit the file (flip `tools.enabled` to `true`) and restart the session. See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a copy-paste-ready file with tools enabled.
 
 ```json
 {

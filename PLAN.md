@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.6.0 shipped. Companion settings file + LLM tool surface added.
+**Status:** v0.7.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 makes the settings file auto-seed on first run.
 
 ## What this is
 
@@ -24,7 +24,8 @@ whisper-stt.ts           — whisper-server STT HTTP client (in-process,
                            was a bash wrapper `fw-cuda-stdout`).
 config.ts                — companion settings loader. Reads
                            ~/.pi/agent/pi-voice-telegram.json with
-                           graceful fallback. v0.6.0.
+                           graceful fallback. v0.7.0+: auto-seeds a
+                           safe default when the file is missing.
 tools.ts                 — synthesize_voice + transcribe_audio tool
                            registrations. v0.6.0. Opt-in.
 PLAN.md                  — this file.
@@ -91,6 +92,27 @@ The agent's `~/.pi/agent/` follows a "one JSON per concern at the root" conventi
 
 Defaults: `inbound.echoEnabled = true`, `tools.enabled = false`. Anything not present = current behavior.
 
+## v0.7.0 — auto-seed the companion settings file (shipped)
+
+**Why:** the v0.6.0 install was opaque — operators upgrading from v0.5.0 had no way to discover the new settings file or the tool surface unless they read the README. v0.7.0 makes the file discoverable by writing a default on first run.
+
+**What shipped:**
+
+- `config.ts` extended: on `session_start`, if the file is absent (`ENOENT`), write a safe default (echo on, tools off) to disk and log a single notice to stdout. Idempotent — only fires when the file is missing; existing files (operator-edited or hand-placed) are never overwritten. Malformed JSON is left intact (no silent overwrite; the extension's in-memory defaults apply). A failed write (read-only FS, permission denied) is silently absorbed — the extension's defaults still apply, no behavior change.
+- `package.json` — bumped to v0.7.0.
+- `README.md` — "Optional `pi-voice-telegram.json`" section updated to document the auto-seed.
+
+**Operational semantics:**
+
+| Pre-restart state | After restart |
+|---|---|
+| File missing | File written with default content. One log line. |
+| File present (any content) | Untouched. No log line. |
+| File present but malformed JSON | Untouched. Extension's in-memory defaults apply. |
+| File present, FS read-only | Extension's in-memory defaults apply. |
+
+The auto-seed is a UX improvement, not a behavior change: operators who don't touch the new file get the same experience as v0.5.0 (echo on, tools off). Operators who want tools edit the file and restart.
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -113,7 +135,6 @@ Defaults: `inbound.echoEnabled = true`, `tools.enabled = false`. Anything not pr
 - `stt.lang` and `tts.*` defaults in the settings file (items 3, 5).
 - A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang defaults). Useful for debugging without a restart.
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
-- **Auto-seed `pi-voice-telegram.json` on first run.** Today the operator copies `examples/pi-voice-telegram.json` into the agent dir by hand. v0.7.0 could write a default (all defaults, so a no-op for behavior) on `session_start` if the file is missing, and log a notice. The trade-off: auto-seeding is friendlier for new users but reduces the operator's sense of "I installed something, it didn't write files behind my back." Decision needed: keep the explicit-copy model, or auto-seed with the no-op default.
 
 ## What this extension does NOT do
 
@@ -125,6 +146,7 @@ Defaults: `inbound.echoEnabled = true`, `tools.enabled = false`. Anything not pr
 ## Migration notes
 
 - v0.5.0 → v0.6.0: no breaking changes. The companion settings file is opt-in. Existing deployments that don't have `pi-voice-telegram.json` get the same behavior as v0.5.0 (echo on, no tools). To enable tools, add the file with `tools.enabled: true`.
+- v0.6.0 → v0.7.0: no breaking changes. On first restart after upgrade, the extension writes a default `pi-voice-telegram.json` to disk if absent (logged once). The default matches v0.5.0 behavior (echo on, tools off), so the seed is a no-op for behavior. Existing operator-edited files are not touched.
 - `package.json` peer-deps gain `@sinclair/typebox` (marked `optional: true` in `peerDependenciesMeta` since the agent bundles it transitively; only needed at the extension's build/test time, not at runtime when consumed by the agent).
 
 ## File history (high level)
@@ -135,3 +157,4 @@ Defaults: `inbound.echoEnabled = true`, `tools.enabled = false`. Anything not pr
 - **v0.4.0** — README + INSTALL docs updated to reflect in-process pipelines.
 - **v0.5.0** — `echo.ts` consolidated; `clearTranscriptCache` exports; per-session transcript cache.
 - **v0.6.0** — companion settings file + LLM tool surface (`synthesize_voice`, `transcribe_audio`).
+- **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file.
