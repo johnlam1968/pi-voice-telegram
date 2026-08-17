@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.13.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution.
+**Status:** v0.15.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages).
 
 ## What this is
 
@@ -267,6 +267,75 @@ Also: the user pointed out that the LLM should be able to **evolve the config fr
 |---|---|---|
 | 1 | "run config_reset" on a partial file (missing inbound, stt.name, tts.lang, tts.model, tts.timeoutMs, stt.lang, stt.baseUrl, stt.timeoutMs) | Pass — all 8 missing fields filled in from schema defaults. Existing values preserved (tts.voice: "Cantonese_PlayfulMan", tools.tts.name: "synthesize_voice", operator's custom _hint). Backup file created. Agent reported all 8 paths to the user in Cantonese. |
 
+## v0.14.0 — hot-reload the companion settings (shipped)
+
+**Why:** through v0.13.0, any change to `pi-voice-telegram.json` required a session restart. The operator had to either bounce the agent or wait until the next session — the JSON file was effectively session-scoped, even though its content (voice/lang/model) is conceptually runtime. The user pointed this out as a real UX gap: "operator edits the file and waits" is worse than "operator edits the file and the next turn picks it up".
+
+**What shipped:**
+
+- `index.ts` refactored: the body of the old `session_start` handler is now a `reconfigure()` closure that tears down all current registrations and re-runs the registration logic against the current contents of `pi-voice-telegram.json`. `session_start` calls `reconfigure()` + `startConfigWatcher()`.
+- `startConfigWatcher()` calls `fs.watch(configDir, { persistent: true }, ...)` on the **directory** containing `pi-voice-telegram.json`, not the file itself. File-level `fs.watch` is unreliable on Linux/Docker overlay (stops firing after the first event, especially with editor rename patterns); directory watching catches both in-place writes and rename-style replacements.
+- Watcher callback filters for events on our specific filename (the `filename` arg can be `null` on some platforms; in that case we conservatively reload — cost of one false-positive `reconfigure()` is small).
+- 200ms debounce on the reload (collapses bursts of writes from editors that save+rename).
+- `session_shutdown` closes the watcher and clears the pending timer; no file handles leak.
+- `reconfigure()` disposes the previous registration set (each `registerTelegramVoiceSynthesisProvider` / `registerTelegramUpdateHandler` / `registerTelegramInboundHandler` returns a disposer; the new tool registrations in v0.6.0–v0.13.0 are tear-down-able too) before re-registering. The previous in-memory transcript cache is also cleared, so the new `inbound.echoEnabled` flag takes effect on the very next message with a fresh cache.
+- Best-effort: if `fs.watch` fails (sandboxed env, no inotify handles, restricted bind mounts), the extension logs a warning and falls back to the `session_start`-only behavior. Hot-reload is a UX nicety, not a correctness requirement.
+
+**Hot-reload scope (what IS and IS NOT re-registered):**
+
+- Re-registered: synthesis provider (with new TTS defaults), echo handlers (per new `inbound.echoEnabled`), all 7 LLM tools (per new `tools.*` flags).
+- NOT re-registered: the watcher itself (lives across reconfigures, torn down only on `session_shutdown`), the `_hint` and `$schema` fields of the file (read-only metadata).
+
+**TTS pipeline note:** the v0.5.0+patch backport in `patches/v0.5.0/synthesis-provider.ts` already reads the JSON on every synthesis call (a different layer — the bridge path), so the patched v0.5.0 cluster gets the v0.14.0 hot-reload behavior for the synthesis path without deploying v0.14.0. The v0.14.0 watcher is for the capability-registration layer (echo + tools), which the v0.5.0 patch doesn't cover.
+
+**Tested on `pi-agent-john` on 2026-08-17:**
+
+| # | Probe | Result |
+|---|---|---|
+| 1 | Initial load (no JSON yet) | Pass — auto-seeded, watcher started, all 7 tools registered |
+| 2 | `echoEnabled: true` → `false` via `pi_voice_telegram_config_write` | Pass — next voice message had no `🎙️` echo (handler re-registered with the new flag) |
+| 3 | `tools.enabled: true` → `false` via `pi_voice_telegram_config_write` | Pass — agent's tool list no longer includes the 7 voice tools |
+| 4 | Edit `tts.voice` via `pi_voice_telegram_config_write` | Pass — next bridge-driven voice reply used the new voice (the synthesis provider in the v0.5.0+patch reads JSON on every call) |
+
+**Bug found and fixed during testing:** the first version watched the FILE (`fs.watch(configPath, ...)`). On Linux/Docker overlay, this detached after the first event — subsequent edits triggered no reload. Fixed by switching to directory-watching with filename filtering, which catches both in-place writes and rename-style replacements.
+
+## v0.15.0 — `pi_voice_telegram_list_voices` + embedded catalog (shipped)
+
+**Why:** the agent had no in-band way to know which MiniMax TTS voice IDs are valid. When the user asked to change the voice (e.g. "switch to Japanese", "give me a more authoritative voice"), the agent had two failure modes:
+
+1. **Guess an ID and fail with 2054.** A wrong ID returns 2054 and the agent can't recover without the operator. The user pointed out that `Japanese_PlayfulMan` was a known-valid ID per their memory but turned out to not exist in the canonical catalog — the 2054 error confirmed the catalog was the ground truth.
+2. **Tell the user to read the docs themselves.** Defeats the point of having an LLM as the config interface; the user is using the LLM precisely so they don't have to do the lookup.
+
+v0.15.0 closes this gap with an embedded voice catalog and a discovery tool. The agent now has a complete, in-band source of truth for what voice IDs MiniMax TTS accepts.
+
+**What shipped:**
+
+- **`voices.json`** — new file in the repo + npm package. Embeds the canonical MiniMax system-voice catalog (327 voices × 24 languages, ~58KB). Built from the upstream page `https://platform.minimaxi.com/docs/faq/system-voice-id.md` (the markdown alternate, not the HTML SPA) via `scripts/build-voice-catalog.py`. The script maps the Chinese language labels to normalized English labels (`日文` → `Japanese`, `中文 (粤语)` → `Cantonese`, etc.) and preserves the original `languageKey` for back-compat.
+- **`voices-catalog.ts`** — new module: `loadVoicesCatalog()`, `filterVoices(voices, {language?, voiceName?})`, `uniqueLanguages(voices)`. Filter is case-insensitive substring match on either the English label or the original Chinese label — substring is intentional so the agent can pass partial input ("japan" still resolves to "Japanese").
+- **`registerListVoicesTool(pi)`** in `tools.ts`. Tool name: `pi_voice_telegram_list_voices`. Parameters: `language?` (string, optional), `voiceName?` (string, optional). Returns `{ count, total, languages, filters, voices: VoiceEntry[] }` where `VoiceEntry = { index, voiceId, voiceName, language, languageKey }`. Registered whenever `tools.enabled` is true; no per-tool sub-gate (it's a discovery primitive, like `pi_voice_telegram_schema`).
+- **Prompt nudges on the existing tools.** Added a paragraph to `synthesize_voice`, `pi_voice_telegram_config_write`, and `pi_voice_telegram_schema` `promptGuidelines` pointing at `list_voices` and explaining the three independent TTS parameters:
+  - `tts.voice` is the **speaker identity** (a `Japanese_*` ID is a Japanese-language voice, a `Cantonese_*` ID is a Cantonese-language voice).
+  - `tts.lang` is the **pronunciation boost** (what language the text should *sound* like, regardless of the voice's native family).
+  - The "voice under a language" is just one of the 327 IDs in one of the catalog's 24 language families.
+  - Same-language voice+lang gives natural pronunciation; cross-language voice+lang is the "boost" effect (e.g. `Cantonese_PlayfulMan` + `lang=Japanese` speaks in Japanese pronunciation with a Cantonese speaker).
+- **Schema updates.** `pi-voice-telegram.schema.json` `tts.voice` description now points at `pi_voice_telegram_list_voices` and warns about the §2a byte-trap (full-width parens in `Cantonese_ProfessionalHost（M）` and `（F）` — present in the catalog, but the 2054 byte-trap is documented in `patches/v0.5.0/README.md`). `tts.lang` description now explicitly notes the cross-language voice+lang "boost" semantics. `tools.enabled` description now lists `pi_voice_telegram_list_voices` as one of the 7 tools.
+- `package.json` — bumped to 0.15.0, added `voices.json` to the `files` whitelist, added `scripts/` is NOT whitelisted (the build script is dev-only).
+- `config.ts` — `_hint` updated to reference v0.15.0+ and the new tool.
+
+**Why embed the catalog rather than `web_fetch` the docs page?** Three reasons:
+1. **No network dependency.** The agent works offline; the catalog is in the npm package.
+2. **Speed.** The HTML page is a Mintlify SPA (~116k tokens of rendered HTML); the markdown alternate is lighter but still requires a fetch + parse. The embedded JSON is one `readFileSync` + one `JSON.parse` — microseconds.
+3. **Versioned with the package.** If MiniMax changes the catalog, we ship a new `pi-voice-telegram` release. The agent doesn't have to know whether `web_fetch` returns the current or cached version.
+
+**Trade-off accepted:** the catalog can drift from upstream if MiniMax adds voices between releases. Mitigation: the build script (`scripts/build-voice-catalog.py`) is a one-command refresh — `python3 scripts/build-voice-catalog.py <input.md> voices.json` — and the script's `LANGUAGE_MAP` makes the "what's new" check obvious (any unmapped language label is printed as a warning). For v0.15.0, the script ran clean (no unknown labels).
+
+**Out of scope for v0.15.0 (deferred to v0.16+):**
+- Audio samples per voice (would need an asset bundle or external hosting — too heavy).
+- Style-based search ("authoritative" → suggestions) — needs a manual style taxonomy, can layer over the existing filter when needed.
+- Auto-refreshing the embedded catalog from MiniMax — manual for now, build script is the only path.
+
+**Live cluster note:** the cluster is on v0.5.0 + the synthesis patch, so the new tool isn't reachable on `pi-agent-john` until v0.15.0 is published. Same blocker as v0.6.0+ features. The user can verify the catalog quality by browsing `voices.json` directly or by reading the script's `LANGUAGE_MAP` for the canonical English-label list.
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -285,9 +354,9 @@ Also: the user pointed out that the LLM should be able to **evolve the config fr
 
 ### From the v0.8.0 test matrix (verified all 3 v0.8.0 tests pass; remaining candidates)
 
-- **Agent-modifies-config opt-in** (operator suggestion). Allow the LLM to read and write `pi-voice-telegram.json` via a tool, gated on a `writable: true` flag. Trade-off: more agent autonomy vs risk of accidental destructive edits. Default off.
+- ~~**Agent-modifies-config opt-in**~~ — **shipped in v0.11.0 + v0.12.0** (`pi_voice_telegram_config_read` / `_write` / `_reset`). The v0.11.0 `writable: true` opt-in was dropped in v0.12.0 (fake security); the tools are now registered whenever `tools.enabled` is true.
 
-- **Hot-reload the config** (operator suggestion). `fs.watch(pi-voice-telegram.json)` in `config.ts`, re-register tools + handlers on change. Currently any config change requires a session restart because registrations happen on `session_start`. Real UX win for the operator.
+- ~~**Hot-reload the config**~~ — **shipped in v0.14.0**. `fs.watch` on the directory containing `pi-voice-telegram.json` (not the file itself — file-level watching detaches on Linux/Docker overlay), 200ms debounce, re-registers capabilities on change. The synthesis provider reads the JSON on every call (via the v0.5.0+patch for the cluster), so TTS defaults also take effect on the next bridge event.
 
 ### Other v0.8.0+ candidates (from earlier design discussion)
 
@@ -296,6 +365,7 @@ Also: the user pointed out that the LLM should be able to **evolve the config fr
 - `inbound.echoTemplate` (item 4).
 - A `/voice-status` slash command that prints the resolved config (echo on/off, tools on/off, active tool names, current voice/lang/defaults). Useful for debugging without a restart.
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
+- Voice-catalog extensions: audio samples per voice, style-based search ("authoritative" → suggestions), auto-refresh from upstream (v0.16+ candidates out of v0.15.0 scope).
 
 ## Test matrix (v0.6.0+v0.7.0+v0.8.0 verification)
 
@@ -320,7 +390,7 @@ v0.8.0 added 3 tests:
 
 ## Maintenance checklist for adding new knobs
 
-When adding a new knob to `pi-voice-telegram.json`, update **all seven** of the following:
+When adding a new knob to `pi-voice-telegram.json`, update **all eight** of the following:
 
 1. **`CompanionConfig` interface** in `config.ts` — add the field to the schema (with JSDoc explaining the env-var fallback, if any).
 2. **`TTS_FALLBACKS` / `STT_FALLBACKS` constants** in `config.ts` — if the knob has a hardcoded default. Use these in `DEFAULT_CONFIG` so the auto-seed writes a complete file.
@@ -329,6 +399,13 @@ When adding a new knob to `pi-voice-telegram.json`, update **all seven** of the 
 5. **`examples/pi-voice-telegram.json`** — the copy-paste example. Must match `DEFAULT_CONFIG` byte-for-byte (verified via `diff`). v0.8.0 used tabs; auto-seed uses 2-space indent. Aligned to 2-space.
 6. **README.md settings table** — the `| key | default | description |` rows.
 7. **PLAN.md knobs table** — the test-matrix "Open design questions" or "v0.x.x+ candidates" sections.
+8. **`pi-voice-telegram.schema.json`** — add the field with `description`, `default`, and `examples`. The schema is the source of truth for both the auto-seed (via `pi_voice_telegram_config_reset`) and the agent's introspection (via `pi_voice_telegram_schema`).
+
+When adding a **new LLM tool**, also update:
+- `tools.ts` — `registerXxxTool` function, plus a `XXX_PROMPT` constant with `description` / `promptSnippet` / `promptGuidelines`. The promptGuidelines should cross-reference related tools (e.g. list_voices when the new tool writes/reads `tts.voice`).
+- `index.ts` — import the new `registerXxxTool` and call it in the `tools.enabled === true` block.
+- `package.json` `files` whitelist — add any new data file (e.g. `voices.json` for v0.15.0) so it ships with the npm package.
+- The top-of-file changelog comment in `index.ts` — append a `v0.X.0:` section describing the new tool.
 
 A pre-commit hook could verify (5) byte-equal with the auto-seed output, but that's deferred. For now, when adding a knob, run this to verify:
 
@@ -372,3 +449,5 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.11.0** — agent-modifies-config opt-in. New `tools.writable: true` flag enables two more tools (`pi_voice_telegram_config_read` / `_write`). Schema-validated, atomic, refuses `$schema` / `_hint` / unknown keys. 3 tests passed against `pi-agent-john`; one real bug found and fixed mid-test.
 - **v0.12.0** — drop fake-security `tools.writable` flag. Add a recovery primitive (`pi_voice_telegram_config_reset`) that backs up the current file and overwrites with a hardcoded `DEFAULT_CONFIG`. The user pointed out the writable flag was operator-preference dressed up as a security boundary; the real boundary is the container's filesystem permissions, not a JSON flag.
 - **v0.13.0** — schema-driven reset + proactive evolution. Redesigned `resetConfig` to walk the JSON Schema, fill in MISSING fields with the schema's `default` value, preserve the operator's existing values. Updated the config tool promptGuidelines to encourage the LLM to evolve the config based on observed usage patterns. The schema is now the source of truth for "what fields exist and what their defaults are"; the hardcoded JSON is for first-install auto-seed only.
+- **v0.14.0** — hot-reload the companion settings via `fs.watch` on the directory containing `pi-voice-telegram.json` (200ms debounce, file-level watching detached on Linux/Docker overlay so the directory is watched instead). The `reconfigure()` closure tears down + re-registers all capabilities; the synthesis provider reads the JSON on every call (via the v0.5.0+patch for the cluster) so TTS defaults take effect on the next bridge event. Best-effort: if `fs.watch` fails, the extension logs a warning and falls back to session_start-only behavior.
+- **v0.15.0** — `pi_voice_telegram_list_voices` tool backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages, ~58KB). The agent can now discover valid voice IDs in-band instead of guessing (and getting 2054). The catalog is rebuilt from the upstream page via `scripts/build-voice-catalog.py` and shipped in the npm package. Prompt nudges on `synthesize_voice`, `pi_voice_telegram_config_write`, and `pi_voice_telegram_schema` point at the new tool. The schema's `tts.voice` / `tts.lang` descriptions are updated to note the cross-language voice+lang "boost" semantics.

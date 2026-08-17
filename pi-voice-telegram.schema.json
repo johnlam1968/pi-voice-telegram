@@ -31,7 +31,7 @@
 				"enabled": {
 					"type": "boolean",
 					"default": false,
-					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false.",
+					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false.",
 					"examples": [true, false]
 				},
 				"tts": {
@@ -82,14 +82,14 @@
 				"voice": {
 					"type": "string",
 					"default": "Cantonese_PlayfulMan",
-					"description": "Voice ID. Replaces $PI_MM_TTS_VOICE when present in JSON. MiniMax T2A API voice ID; the full list is documented at https://platform.minimaxi.com/docs/api-reference/speech-t2a-http.",
-					"examples": ["Cantonese_PlayfulMan", "Cantonese_GentleLady", "English_SereneWoman"]
+					"description": "Voice ID. Replaces $PI_MM_TTS_VOICE when present in JSON. MiniMax T2A API voice ID; the full list is shipped in this package as `voices.json` (327 voices across 24 languages) and surfaced to the agent via the `pi_voice_telegram_list_voices` tool — use that tool to discover valid IDs. A wrong ID returns 2054 with no in-band recovery. Prefer all-ASCII IDs (`Japanese_*`, `Cantonese_*` without full-width parens); see patches/v0.5.0/README.md for the §2a byte-trap details.",
+					"examples": ["Cantonese_PlayfulMan", "Cantonese_GentleLady", "English_SereneWoman", "Japanese_OptimisticYouth", "Japanese_IntellectualSenior"]
 				},
 				"lang": {
 					"type": "string",
 					"default": "Chinese,Yue",
-					"description": "Language boost passed to the TTS API. Replaces $PI_MM_TTS_LANG. Format is `Language,Dialect` (e.g. `Chinese,Yue` for Cantonese, `English,American` for en-US, `Chinese,Mandarin` for Mandarin).",
-					"examples": ["Chinese,Yue", "Chinese,Mandarin", "English,American", "Japanese"]
+					"description": "Language boost passed to the TTS API. Replaces $PI_MM_TTS_LANG. Format is `Language,Dialect` (e.g. `Chinese,Yue` for Cantonese, `English,American` for en-US, `Chinese,Mandarin` for Mandarin, `Japanese` for Japanese). Independent of `voice` — `voice` is the speaker identity, `lang` is the pronunciation. Same-language voice+lang gives natural pronunciation; cross-language voice+lang is the 'boost' effect (e.g. Cantonese_PlayfulMan + lang=Japanese speaks with Japanese pronunciation via a Cantonese speaker).",
+					"examples": ["Chinese,Yue", "Chinese,Mandarin", "English,American", "Japanese", "Korean"]
 				},
 				"model": {
 					"type": "string",

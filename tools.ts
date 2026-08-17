@@ -56,6 +56,11 @@ import {
 	resetConfig as ioResetConfig,
 	writeKey as ioWriteKey,
 } from "./config-io.js";
+import {
+	filterVoices as catalogFilterVoices,
+	loadVoicesCatalog,
+	uniqueLanguages as catalogUniqueLanguages,
+} from "./voices-catalog.js";
 
 // --- Per-tool overrides from the companion settings file ---
 
@@ -82,6 +87,7 @@ function buildTtsPrompt(name: string): TtsPromptText {
 			`Use ${name} when the user explicitly asks for a voice reply, when a voice memo would convey the answer more naturally than text, or to read a file aloud.`,
 			`${name} only writes a file — to deliver it to the user, call the bridge's telegram_attach tool with the returned path.`,
 			`Do NOT use ${name} as a turn-reply voice — the bridge handles automatic voice replies (driven by voice.replyMode in telegram.json). ${name} is for ad-hoc voice.`,
+			`When the user asks to change the voice or language, call pi_voice_telegram_list_voices FIRST to discover valid voice IDs. Don't guess — a wrong ID returns 2054 and you can't recover without the operator. The three TTS parameters are independent: tts.voice is the speaker identity, tts.lang is the pronunciation boost (cross-language voice+lang = "boost" effect), and a \`voice under a language\` is just one of the 327 IDs in the catalog.`,
 		],
 	};
 }
@@ -237,6 +243,7 @@ const SCHEMA_PROMPT = {
 		"Use pi_voice_telegram_schema when you need to know what knobs are available, what their defaults are, or what values are valid. Especially useful before suggesting edits to the companion settings file.",
 		"The returned text is the same JSON Schema linked from each settings file's $schema field. It includes descriptions, defaults, and examples for every key.",
 		"Pass the `key` parameter to fetch a specific section (e.g. key='tts.voice' returns just the description/default/examples for that one field) rather than reading the whole schema.",
+		"Note: tts.voice is a free-form string in the schema — for valid voice IDs, call pi_voice_telegram_list_voices instead. The schema tells you WHAT the knob is; the catalog tells you what VALUES are valid for it.",
 	],
 };
 
@@ -341,6 +348,7 @@ const CONFIG_WRITE_PROMPT = {
 	promptGuidelines: [
 		"Use pi_voice_telegram_config_write when the operator asks to change a setting — especially voice/TTS/language settings like 'change tts.lang to ja', 'use English voice', 'switch to a female voice', 'turn off inbound echo'. Don't just talk about the change being possible — actually call the tool. The operator is using the LLM as the interface to the config; talking without acting is a fail mode.",
 		"CRITICAL: TTS/STT settings (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl, etc.) live in THIS file (~/.pi/agent/pi-voice-telegram.json), NOT in telegram.json. The bridge's telegram.json controls the bridge (which chat to use, polling, role-based access). The companion settings control the voice pipeline. If the user asks about voice/TTS/language, this is the right place to look.",
+		"Before writing tts.voice, call pi_voice_telegram_list_voices to confirm the ID is valid. The catalog is the only in-band source of truth for what IDs MiniMax TTS accepts — guessing returns 2054 and you can't recover. Same for tts.lang (any string is accepted but a wrong value produces wrong pronunciation). The three TTS parameters are independent: tts.voice (speaker identity), tts.lang (pronunciation boost — cross-language voice+lang = 'boost' effect), and the implicit 'voice under a language' (a `Japanese_*` ID is a Japanese-language voice).",
 		"Two flows to choose between: (1) Reactive — operator asks 'set tts.lang to ja' → call config_write with the new value. (2) Proactive — operator keeps asking for English voice while tts.lang is 'Chinese,Yue' → call config_read first to confirm the mismatch, then either propose the change (recommended) or apply it directly if the pattern is clear.",
 		"Always call config_read FIRST when changing a value, so you can report old → new. Two-step (read → write) is the operator's safety net.",
 		"Pass the dotted `key` path and the new `value` (as a JSON value, not a string). The tool will reject writes to `$schema`, `_hint`, or any key not in the schema.",
@@ -485,6 +493,97 @@ export function registerConfigResetTool(pi: ExtensionAPI): void {
 					backupPath: result.backupPath,
 					added: result.added,
 					hadPrevious: Boolean(result.backupPath),
+				},
+			};
+		},
+	});
+}
+
+// --- pi_voice_telegram_list_voices (v0.15.0) ---
+//
+// Returns the embedded MiniMax TTS voice catalog (327 entries, 24
+// languages) so the LLM can discover valid voice IDs and pick the
+// right one for a language. The catalog is shipped as `voices.json`
+// in the npm package, parsed on demand (the file is small, ~58KB,
+// and rarely changes). The tool is read-only, no side effects.
+// Registered unconditionally when `tools.enabled: true`.
+//
+// Why this exists: the agent can't otherwise know which voice IDs
+// are valid for MiniMax TTS. A wrong ID returns 2054 and the agent
+// has no way to recover without the operator. The catalog gives the
+// agent an in-band answer.
+//
+// Filter semantics: `language` is a case-insensitive substring match
+// against either the English label ("Japanese") or the original
+// Chinese label ("日文"). `voiceName` is a case-insensitive substring
+// match against the display name. Both are optional; omit both for
+// the full catalog.
+
+const LIST_VOICES_PROMPT = {
+	description:
+		"List valid MiniMax TTS voice IDs from the embedded catalog. Without filters, returns the full catalog (327 voices across 24 language families). Pass `language` to filter to a single language (e.g. 'Japanese', 'Cantonese', 'Korean', 'Mandarin' — substring match on either the English or original Chinese label). Pass `voiceName` to filter by display-name substring (e.g. 'optimistic', 'commander', 'maiden'). Returns a JSON object with `voices` (array of {voiceId, voiceName, language, languageKey, index}), `count` (filtered), `total` (full catalog), and `languages` (sorted list of language labels in the result). Use this to pick a valid voiceId before calling pi_voice_telegram_config_write with tts.voice, or before passing a per-call `voice` argument to synthesize_voice.",
+	promptSnippet:
+		"Returns valid MiniMax TTS voice IDs (327 across 24 languages). Filter by language or voice-name substring.",
+	promptGuidelines: [
+		"Use pi_voice_telegram_list_voices before suggesting or writing a tts.voice value. The catalog is the only in-band way to know which IDs are valid — guessing returns 2054 and the agent can't recover.",
+		"Three TTS parameters are independent and each matters: (1) `tts.voice` is the SPEAKER IDENTITY (a `Japanese_*` ID is a Japanese-language voice, a `Cantonese_*` ID is a Cantonese-language voice). (2) `tts.lang` is the PRONUNCIATION BOOST — what language the text should SOUND like, regardless of the voice's native family. (3) The 'voice under a language' is just a specific ID from one of the catalog's 24 language families. Same-language voice+lang gives natural pronunciation; cross-language voice+lang is the 'boost' effect (e.g. Cantonese_PlayfulMan + lang=Japanese speaks in Japanese pronunciation with a Cantonese speaker).",
+		"Pass the `language` filter with an exact English label from the catalog ('Japanese', 'Cantonese', 'Mandarin', 'Korean', 'Spanish', etc.) — substring match is supported for partial input. Pass `voiceName` to narrow further (e.g. language='Japanese' + voiceName='commander' returns Japanese_SeriousCommander).",
+		"After picking a voiceId from the result, call pi_voice_telegram_config_read first to capture the old value, then pi_voice_telegram_config_write with the new tts.voice. The standard two-step (read → write) gives the operator an old→new diff.",
+		"If the operator asks for a 'natural-sounding' voice, the default heuristic is same-language voice+lang (e.g. tts.voice='Japanese_OptimisticYouth' + tts.lang='Japanese' for natural Japanese). If they ask for a 'boost' or 'voice in language X but pronounced like Y', that means cross-language voice+lang.",
+	],
+};
+
+export function registerListVoicesTool(pi: ExtensionAPI): void {
+	pi.registerTool({
+		name: "pi_voice_telegram_list_voices",
+		label: "List valid TTS voice IDs",
+		description: LIST_VOICES_PROMPT.description,
+		promptSnippet: LIST_VOICES_PROMPT.promptSnippet,
+		promptGuidelines: LIST_VOICES_PROMPT.promptGuidelines,
+		parameters: Type.Object({
+			language: Type.Optional(
+				Type.String({
+					description:
+						"Optional language filter. Substring (case-insensitive) on either the English label ('Japanese', 'Cantonese', 'Mandarin', 'Korean', 'Spanish', 'Portuguese', 'French', 'German', 'Russian', 'Italian', 'Arabic', 'Indonesian', 'Turkish', 'Dutch', 'Vietnamese', 'Thai', 'Polish', 'Romanian', 'Greek', 'Czech', 'Finnish', 'Hindi', 'Ukrainian', 'English') or the original Chinese label from the upstream catalog ('日文', '中文 (粤语)', '中文 (普通话)', '韩文', '西班牙文', etc.). Omit for all languages.",
+				}),
+			),
+			voiceName: Type.Optional(
+				Type.String({
+					description:
+						"Optional case-insensitive substring filter on the display name (e.g. 'optimistic', 'commander', 'maiden', 'playful', 'intellectual'). Combine with `language` to narrow further.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			const loaded = loadVoicesCatalog();
+			if (!loaded.ok) {
+				throw new Error(
+					`pi_voice_telegram_list_voices: cannot read voices.json from the extension's npm package: ${loaded.error}. ` +
+						`This usually means the package was installed without the catalog. ` +
+						`Reinstall pi-voice-telegram@>=0.15.0 or check that voices.json is present in the npm package.`,
+				);
+			}
+			const filtered = catalogFilterVoices(loaded.data.voices, {
+				language: params.language,
+				voiceName: params.voiceName,
+			});
+			const result = {
+				count: filtered.length,
+				total: loaded.data.voices.length,
+				languages: catalogUniqueLanguages(filtered),
+				filters: {
+					language: params.language ?? null,
+					voiceName: params.voiceName ?? null,
+				},
+				voices: filtered,
+			};
+			return {
+				content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+				details: {
+					count: filtered.length,
+					total: loaded.data.voices.length,
+					language: params.language ?? null,
+					voiceName: params.voiceName ?? null,
 				},
 			};
 		},

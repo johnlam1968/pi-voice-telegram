@@ -299,14 +299,13 @@ The auto-seeded file includes the same fields as `examples/pi-voice-telegram.jso
 | Key | Default | What it does |
 |---|---|---|
 | `inbound.echoEnabled` | `true` | When `false`, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the `🎙️` confirmation. |
-| `tools.enabled` | `false` | Master switch for LLM tool registration. When `false`, neither `synthesize_voice` nor `transcribe_audio` is registered, regardless of the per-tool flags. |
+| `tools.enabled` | `false` | Master switch for LLM tool registration. When `false`, none of the 7 LLM tools (synthesize_voice, transcribe_audio, pi_voice_telegram_schema, pi_voice_telegram_config_read / _write / _reset, pi_voice_telegram_list_voices) are registered. When `true`, they're all available. |
 | `tools.tts.enabled` | `true` | Register `synthesize_voice`. Honored only when `tools.enabled` is `true`. |
 | `tools.tts.name` | `synthesize_voice` | Override the tool name (rare; for namespace collision avoidance). The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+). |
 | `tools.stt.enabled` | `true` | Register `transcribe_audio`. Honored only when `tools.enabled` is `true`. |
 | `tools.stt.name` | `transcribe_audio` | Override the tool name. Templated like `tools.tts.name`. |
-| `tools.writable` | `false` | Opt-in flag for the LLM's `pi_voice_telegram_config_read` + `pi_voice_telegram_config_write` tools (v0.11.0+). When true, the LLM can read the current companion settings and modify them via schema-validated atomic writes. Default false (operator deny-by-default). |
-| `tts.voice` | `Cantonese_PlayfulMan` | Default voice ID for both the bridge-driven TTS path and the `synthesize_voice` tool. Resolution: JSON > `$PI_MM_TTS_VOICE` > hardcoded. v0.8.0+. |
-| `tts.lang` | `Chinese,Yue` | Default language boost. JSON > `$PI_MM_TTS_LANG` > hardcoded. v0.8.0+. |
+| `tts.voice` | `Cantonese_PlayfulMan` | Default voice ID for both the bridge-driven TTS path and the `synthesize_voice` tool. Resolution: JSON > `$PI_MM_TTS_VOICE` > hardcoded. v0.8.0+. For valid voice IDs, see `pi_voice_telegram_list_voices` (v0.15.0+) — the catalog ships 327 voices across 24 languages. |
+| `tts.lang` | `Chinese,Yue` | Default language boost. JSON > `$PI_MM_TTS_LANG` > hardcoded. v0.8.0+. Independent of `tts.voice`: voice is the speaker identity, lang is the pronunciation. Cross-language voice+lang is the "boost" effect. |
 | `tts.model` | `speech-2.8-hd` | Default TTS model. JSON > `$PI_MM_TTS_MODEL` > hardcoded. v0.8.0+. |
 | `tts.timeoutMs` | `30000` | Per-call synthesis timeout (covers mm-tts + ffmpeg). JSON > `$PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS` > hardcoded. v0.8.0+. |
 | `stt.lang` | `yue` | Default language code for both the inbound echo STT and the `transcribe_audio` tool. JSON > `$PI_TELEGRAM_LANG` > hardcoded. v0.8.0+. |
@@ -315,9 +314,27 @@ The auto-seeded file includes the same fields as `examples/pi-voice-telegram.jso
 
 The `synthesize_voice` tool only writes the OGG/Opus file — the agent delivers it using the bridge's `telegram_attach` tool (`@llblab/pi-telegram` registers this; no companion-side wiring needed). The two-step pattern keeps chat-target resolution, captioning, and multipart-upload concerns in the bridge.
 
-The `tts.*` and `stt.*` fields (v0.8.0+) move the per-extension TTS/STT defaults out of env vars. Layering is **JSON > env var > hardcoded** — an operator who sets `tts.voice` in the JSON overrides `$PI_MM_TTS_VOICE`, which overrides the hardcoded `Cantonese_PlayfulMan`. Env vars are preserved as fallbacks so the cluster's `docker-compose.yaml` doesn't need to change to upgrade. The `synthesis-provider.ts` reads these once per `session_start` and applies them to the bridge-driven TTS path (so changing voice/lang in JSON takes effect after a session restart, not mid-session). The `telegram.json` bridge file still wins for the bridge-owned `outboundHandlers[voice].defaults.{voice,lang,rate}` keys.
+The `tts.*` and `stt.*` fields (v0.8.0+) move the per-extension TTS/STT defaults out of env vars. Layering is **JSON > env var > hardcoded** — an operator who sets `tts.voice` in the JSON overrides `$PI_MM_TTS_VOICE`, which overrides the hardcoded `Cantonese_PlayfulMan`. Env vars are preserved as fallbacks so the cluster's `docker-compose.yaml` doesn't need to change to upgrade. The synthesis provider reads these on every call (v0.5.0+patch backport for the cluster, v0.8.0+ in this package), so changing voice/lang in JSON takes effect on the next bridge-driven voice reply, with no session restart. The `telegram.json` bridge file still wins for the bridge-owned `outboundHandlers[voice].defaults.{voice,lang,rate}` keys.
 
-Settings are read once per `session_start`. Reload via session restart (or `/reload` if the host agent supports it).
+**v0.14.0+:** the companion settings file is now **hot-reloadable**. The extension watches the directory containing `pi-voice-telegram.json` (200ms debounce); any external edit (operator `vi`/editor, the LLM's own `pi_voice_telegram_config_write` call, an MCP-driven automation) triggers a debounced reconfigure — the previous registration set is disposed and a fresh one is built from the new file contents. The synthesis provider is re-created (so new TTS defaults apply on the next bridge event), the echo handlers are re-registered per the new `inbound.echoEnabled`, and the 7 LLM tools are re-registered per the new `tools.*` flags. Hot-reload is best-effort: if `fs.watch` fails (sandboxed env, no inotify handles, etc.) the extension logs a warning and falls back to the `session_start`-only behavior.
+
+### LLM tools (registered when `tools.enabled: true`)
+
+When `tools.enabled` is `true`, the agent gets **seven** tools. All are read-only or schema-validated-write; none bypass the JSON file the operator owns.
+
+| Tool | What it does | v |
+|---|---|---|
+| `synthesize_voice` | TTS: write an OGG/Opus file via mm-tts + ffmpeg. Returns the path. Pair with the bridge's `telegram_attach` to deliver. | 0.6.0 |
+| `transcribe_audio` | STT: transcribe a local audio file via the local whisper-server. Returns the transcript text. | 0.6.0 |
+| `pi_voice_telegram_schema` | Introspection: return the JSON Schema (or a per-key slice) for the companion settings file. Same schema as the `$schema` field in the file. | 0.10.0 |
+| `pi_voice_telegram_config_read` | Read: return the current settings (full or per-key). | 0.11.0 |
+| `pi_voice_telegram_config_write` | Write: schema-validated atomic write of a single key. Refuses `$schema`, `_hint`, and unknown keys. Returns old → new diff. | 0.11.0 |
+| `pi_voice_telegram_config_reset` | Reset: schema-driven migration — fills MISSING fields with schema defaults, preserves operator's existing values. Backs up the previous file to `.bak.<unix-ms>`. | 0.12.0 + 0.13.0 |
+| `pi_voice_telegram_list_voices` | Discovery: return valid MiniMax TTS voice IDs from the embedded 327-voice catalog. Filter by `language` (e.g. 'Japanese', 'Cantonese') or `voiceName` (substring). | 0.15.0 |
+
+The first two wrap the in-process TTS/STT pipelines; the next four give the LLM end-to-end control of the companion settings file; the last is a discovery primitive for voice IDs (so the agent doesn't guess a wrong ID and get 2054). All seven are registered whenever `tools.enabled` is `true` — no per-tool sub-gate beyond `tools.tts.enabled` / `tools.stt.enabled` for the first two.
+
+The `pi_voice_telegram_list_voices` tool ships a 327-entry catalog (`voices.json`, ~58KB) extracted from the official MiniMax system-voice page. The agent can call it to find a valid voice before writing `tts.voice` or before passing a per-call `voice` arg to `synthesize_voice`. Substring filter on either the English label or the original Chinese label — e.g. `language="japan"` resolves to "Japanese", `language="cantonese"` to the 6 Cantonese voices. The 15 Japanese voices are all-ASCII and safe (verified against the catalog as of 2026-08-17); prefer ASCII forms to avoid the §2a byte-trap documented in `patches/v0.5.0/README.md`.
 
 See [`PLAN.md`](./PLAN.md) for the design discussion, open questions, and roadmap.
 

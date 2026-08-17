@@ -44,6 +44,18 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.15.0: added the seventh LLM tool, `pi_voice_telegram_list_voices`,
+ *         backed by an embedded `voices.json` catalog (327 MiniMax TTS
+ *         voices × 24 languages, ~58KB). The agent can now introspect
+ *         valid voice IDs without guessing — guessing returns 2054 and
+ *         the agent has no recovery path. The catalog is shipped in
+ *         the npm package, parsed on demand when the tool is called.
+ *         The existing tool promptGuidelines (synthesize_voice,
+ *         pi_voice_telegram_config_write, pi_voice_telegram_schema) are
+ *         updated to nudge the agent to call list_voices first when the
+ *         user asks about voice/TTS/language changes. Catalog is
+ *         rebuildable from the upstream page via
+ *         `scripts/build-voice-catalog.py`.
  * v0.14.0: hot-reload. The companion settings file is now
  *         watched via `fs.watch`; any external edit (operator
  *         `vi`/editor, the LLM's own `pi_voice_telegram_config_write`
@@ -173,6 +185,7 @@ import {
 	registerConfigReadTool,
 	registerConfigResetTool,
 	registerConfigWriteTool,
+	registerListVoicesTool,
 	registerPiVoiceTelegramSchemaTool,
 	registerSynthesizeVoiceTool,
 	registerTranscribeAudioTool,
@@ -201,7 +214,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 	 * What hot-reload re-registers (v0.14.0):
 	 *   - Synthesis provider (always on; uses the latest TTS defaults)
 	 *   - Echo handlers (gated on `inbound.echoEnabled`)
-	 *   - All six LLM tools (gated on `tools.enabled` + sub-flags)
+	 *   - All seven LLM tools (gated on `tools.enabled` + sub-flags)
 	 *   - The disposal-then-re-register pattern means previous
 	 *     registrations are removed before new ones go in.
 	 *
@@ -268,6 +281,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			registerConfigReadTool(pi);
 			registerConfigWriteTool(pi);
 			registerConfigResetTool(pi);
+			registerListVoicesTool(pi);
 		}
 
 		// sttDefaults is used by the STT tool; when tools.stt.enabled
