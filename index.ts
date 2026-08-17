@@ -44,6 +44,15 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.8.0: per-extension TTS/STT defaults move into the settings file
+ *         (`tts.voice`, `tts.lang`, `tts.model`, `tts.timeoutMs`,
+ *         `stt.lang`, `stt.baseUrl`, `stt.timeoutMs`). Resolution:
+ *         JSON > env var > hardcoded default. The env vars still work
+ *         as fallbacks, so the cluster's `docker-compose.yaml` doesn't
+ *         need to change. The tool prompt text (description / snippet /
+ *         guidelines) is now templated against the resolved tool name,
+ *         so renames via `tools.tts.name` / `tools.stt.name` produce
+ *         consistent LLM-facing strings.
  * v0.7.0: auto-seed a default `~/.pi/agent/pi-voice-telegram.json` on
  *         first run (when missing). The seeded default matches v0.5.0
  *         behavior (echo on, tools off), so the file appearing is a
@@ -80,13 +89,17 @@ import { registerTelegramVoiceSynthesisProvider } from "@llblab/pi-telegram/voic
 import { registerTelegramUpdateHandler } from "@llblab/pi-telegram/updates";
 import { registerTelegramInboundHandler } from "@llblab/pi-telegram/inbound";
 
-import { mmTtsSynthesisProvider } from "./synthesis-provider.js";
+import { createMmTtsSynthesisProvider } from "./synthesis-provider.js";
 import {
 	clearTranscriptCache,
 	handleTelegramInboundForEcho,
 	handleTelegramUpdateForEcho,
 } from "./echo.js";
-import { loadCompanionConfig } from "./config.js";
+import {
+	loadCompanionConfig,
+	resolveSttDefaults,
+	resolveTtsDefaults,
+} from "./config.js";
 import {
 	registerSynthesizeVoiceTool,
 	registerTranscribeAudioTool,
@@ -106,15 +119,25 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		const cfg = loadCompanionConfig();
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 
+		// Resolve per-extension TTS/STT defaults once per session. JSON
+		// > env var > hardcoded default. See `config.ts` for the
+		// layering. The synthesis provider gets the TTS defaults; the
+		// tool registrations get both TTS and STT defaults.
+		const ttsDefaults = resolveTtsDefaults(cfg);
+		const sttDefaults = resolveSttDefaults(cfg);
+
 		// (1) Outbound TTS — always on. The bridge calls this whenever it
 		// wants a voice reply (driven by voice.replyMode + the LLM's
 		// reply). The provider returns `{ audioPath, transcriptText }`
 		// when telegram.json says `voice.sendTranscript = true`;
-		// otherwise just the oggPath.
+		// otherwise just the oggPath. The provider is built via the
+		// factory so it picks up the resolved TTS defaults from the
+		// companion config (v0.8.0+).
 		disposers.push(
-			registerTelegramVoiceSynthesisProvider(mmTtsSynthesisProvider, {
-				id: "pi-voice-telegram/tts",
-			}),
+			registerTelegramVoiceSynthesisProvider(
+				createMmTtsSynthesisProvider({ tts: ttsDefaults }),
+				{ id: "pi-voice-telegram/tts" },
+			),
 		);
 
 		// (2) Inbound echo — default on, opt-out via
@@ -136,12 +159,29 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		// separately. See `tools.ts` for the per-tool promptGuidelines.
 		if (cfg.tools?.enabled === true) {
 			if (cfg.tools.tts?.enabled !== false) {
-				registerSynthesizeVoiceTool(pi, agentDir, cfg.tools.tts);
+				registerSynthesizeVoiceTool({
+					pi,
+					agentDir,
+					nameOverride: cfg.tools.tts?.name,
+					tts: ttsDefaults,
+				});
 			}
 			if (cfg.tools.stt?.enabled !== false) {
-				registerTranscribeAudioTool(pi, agentDir, cfg.tools.stt);
+				registerTranscribeAudioTool({
+					pi,
+					agentDir,
+					nameOverride: cfg.tools.stt?.name,
+					stt: sttDefaults,
+				});
 			}
 		}
+
+		// Suppress unused-variable warnings for sttDefaults — the
+		// synthesis provider doesn't take STT defaults, and the tool
+		// registrations only use sttDefaults when tools.stt.enabled is
+		// true. Keeping the resolve call above so the JSON > env
+		// layering is exercised at startup even when the tools are off.
+		void sttDefaults;
 	});
 
 	pi.on("session_shutdown", () => {

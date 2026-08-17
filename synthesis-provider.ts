@@ -40,16 +40,21 @@ import {
 import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { synthesize as voiceReply } from "./voice-reply.js";
+import { type ResolvedTtsDefaults, resolveTtsDefaults } from "./config.js";
 
 // --- Configuration (host-side runtime contract) ---
 
-const DEFAULT_VOICE = process.env.PI_MM_TTS_VOICE ?? "Cantonese_PlayfulMan";
-const DEFAULT_LANG = process.env.PI_MM_TTS_LANG ?? "Chinese,Yue";
-const DEFAULT_MODEL = process.env.PI_MM_TTS_MODEL ?? "speech-2.8-hd";
-const VOICE_REPLY_TIMEOUT_MS = Number(
-  process.env.PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS ?? "30000",
-);
-
+/**
+ * The synthesis provider reads the companion config to resolve its
+ * defaults (JSON > env > hardcoded, see config.ts). The `telegram.json`
+ * bridge file is still read on every call for the bridge-owned
+ * `outboundHandlers[voice].defaults.{voice,lang,rate}` layering.
+ *
+ * The companion config is read once per provider construction (which
+ * happens at `session_start`), so changes to `pi-voice-telegram.json`
+ * require a session restart. `telegram.json` edits still take effect
+ * mid-session.
+ */
 const CAPTION_MAX = 1024;
 
 // --- telegram.json snapshot ---
@@ -87,48 +92,77 @@ function pickVoiceDefaults(snapshot: TelegramJsonSnapshot): VoiceDefaults {
 
 // --- Provider ---
 
-export const mmTtsSynthesisProvider: TelegramVoiceSynthesisProvider = async (
-  text: string,
-  options?: { lang?: string; rate?: string },
-): Promise<TelegramVoiceSynthesisProviderResult> => {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
-  const snapshot = await readTelegramJson(agentDir);
-  const defaults = pickVoiceDefaults(snapshot);
+/**
+ * The TTS synthesis provider. Reads companion config (JSON > env >
+ * hardcoded) once at construction; bridge `telegram.json` is re-read
+ * on every call so the bridge's per-handler voice/lang defaults take
+ * effect mid-session.
+ *
+ * Built as a factory (not a bare `export const`) so the caller can
+ * pass an explicit config snapshot if they want to override. v0.8.0+
+ * pattern — `index.ts` calls `createMmTtsSynthesisProvider()` once on
+ * `session_start`.
+ */
+export function createMmTtsSynthesisProvider(
+  cfg?: { tts?: ResolvedTtsDefaults },
+): TelegramVoiceSynthesisProvider {
+	const tts = cfg?.tts ?? resolveTtsDefaults(undefined);
+	const fallbackLang = tts.lang;
+	const fallbackVoice = tts.voice;
+	const fallbackModel = tts.model;
+	const fallbackTimeout = tts.timeoutMs;
 
-  const lang = options?.lang ?? defaults.lang ?? DEFAULT_LANG;
-  const voice = defaults.voice ?? DEFAULT_VOICE;
-  const model = DEFAULT_MODEL;
-  const speed = Number(options?.rate ?? 1.0);
+	return async (
+		text: string,
+		options?: { lang?: string; rate?: string },
+	): Promise<TelegramVoiceSynthesisProviderResult> => {
+		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
+		const snapshot = await readTelegramJson(agentDir);
+		const defaults = pickVoiceDefaults(snapshot);
 
-  // voice-reply needs a writable path it can guarantee ownership of.
-  // The bridge may keep / delete this file after delivery — we just have
-  // to hand it a path that doesn't already exist.
-  const oggPath = `${agentDir}/tmp/pi-voice-telegram-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.ogg`;
+		const lang = options?.lang ?? defaults.lang ?? fallbackLang;
+		const voice = defaults.voice ?? fallbackVoice;
+		const model = fallbackModel;
+		const speed = Number(options?.rate ?? 1.0);
 
-  try {
-    await voiceReply({
-      text,
-      voice,
-      lang,
-      model,
-      speed,
-      oggPath,
-      timeoutMs: VOICE_REPLY_TIMEOUT_MS,
-    });
-  } catch (err) {
-    recordTelegramRuntimeEvent("pi-voice-telegram/tts", err, {
-      phase: "synthesize",
-      textLength: text.length,
-    });
-    throw err;
-  }
+		// voice-reply needs a writable path it can guarantee ownership of.
+		// The bridge may keep / delete this file after delivery — we just have
+		// to hand it a path that doesn't already exist.
+		const oggPath = `${agentDir}/tmp/pi-voice-telegram-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.ogg`;
 
-  if (!getTelegramVoiceSendTranscript(snapshot)) {
-    return oggPath;
-  }
+		try {
+			await voiceReply({
+				text,
+				voice,
+				lang,
+				model,
+				speed,
+				oggPath,
+				timeoutMs: fallbackTimeout,
+			});
+		} catch (err) {
+			recordTelegramRuntimeEvent("pi-voice-telegram/tts", err, {
+				phase: "synthesize",
+				textLength: text.length,
+			});
+			throw err;
+		}
 
-  const caption =
-    text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
+		if (!getTelegramVoiceSendTranscript(snapshot)) {
+			return oggPath;
+		}
 
-  return { audioPath: oggPath, transcriptText: caption };
-};
+		const caption =
+			text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
+
+		return { audioPath: oggPath, transcriptText: caption };
+	};
+}
+
+/**
+ * Default export for backwards compatibility — uses the auto-resolved
+ * defaults (reads env vars + companion config from disk). `index.ts`
+ * should prefer the factory form (`createMmTtsSynthesisProvider`) to
+ * share one config snapshot with the tool registrations.
+ */
+export const mmTtsSynthesisProvider: TelegramVoiceSynthesisProvider = createMmTtsSynthesisProvider();

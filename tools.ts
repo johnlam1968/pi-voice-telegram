@@ -20,6 +20,13 @@
  * `telegram_attach` path keeps chat-target resolution, captioning, and
  * multipart-upload concerns in the bridge, where they belong.
  *
+ * v0.8.0: per-extension TTS/STT defaults come from the resolved config
+ * (JSON > env > hardcoded), not from re-reading env vars here. The
+ * prompt text (description / promptSnippet / promptGuidelines) is
+ * templated against the resolved tool name, so renames via
+ * `tools.tts.name` / `tools.stt.name` are reflected consistently in
+ * the LLM-facing strings.
+ *
  * Public APIs used (stable per pi-coding-agent + pi-telegram public-api.md):
  *   - @earendil-works/pi-coding-agent → ExtensionAPI, getAgentDir
  *   - @sinclair/typebox                → Type (parameter schemas)
@@ -35,53 +42,85 @@ import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { synthesize as voiceReplySynthesize } from "./voice-reply.js";
 import { transcribe as whisperTranscribe } from "./whisper-stt.js";
+import {
+	type ResolvedSttDefaults,
+	type ResolvedTtsDefaults,
+} from "./config.js";
 
-// --- TTS defaults (mirror synthesis-provider.ts layering) ---
+// --- Per-tool overrides from the companion settings file ---
 
-const DEFAULT_TTS_VOICE = process.env.PI_MM_TTS_VOICE ?? "Cantonese_PlayfulMan";
-const DEFAULT_TTS_LANG = process.env.PI_MM_TTS_LANG ?? "Chinese,Yue";
-const DEFAULT_TTS_MODEL = process.env.PI_MM_TTS_MODEL ?? "speech-2.8-hd";
-const TTS_TIMEOUT_MS = Number(
-	process.env.PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS ?? "30000",
-);
-
-// --- STT defaults (mirror whisper-stt.ts defaults) ---
-
-const DEFAULT_STT_LANG = process.env.PI_TELEGRAM_LANG ?? "yue";
-const STT_TIMEOUT_MS = Number(process.env.PI_TELEGRAM_STT_TIMEOUT_MS ?? "60000");
-
-/** Per-tool overrides from the companion settings file. */
 export interface ToolNameConfig {
 	tts?: { name?: string };
 	stt?: { name?: string };
 }
 
+// --- Prompt text builders (v0.8.0: templated against the resolved name) ---
+
+interface TtsPromptText {
+	description: string;
+	promptSnippet: string;
+	promptGuidelines: string[];
+}
+
+function buildTtsPrompt(name: string): TtsPromptText {
+	return {
+		description:
+			`Convert text to a Telegram-ready OGG/Opus voice file via MiniMax TTS. Returns the file path. ` +
+			`Use the bridge's telegram_attach tool to deliver it to the user.`,
+		promptSnippet: `Synthesize text to an OGG/Opus voice file (returns path; pair with telegram_attach to send).`,
+		promptGuidelines: [
+			`Use ${name} when the user explicitly asks for a voice reply, when a voice memo would convey the answer more naturally than text, or to read a file aloud.`,
+			`${name} only writes a file — to deliver it to the user, call the bridge's telegram_attach tool with the returned path.`,
+			`Do NOT use ${name} as a turn-reply voice — the bridge handles automatic voice replies (driven by voice.replyMode in telegram.json). ${name} is for ad-hoc voice.`,
+		],
+	};
+}
+
+interface SttPromptText {
+	description: string;
+	promptSnippet: string;
+	promptGuidelines: string[];
+}
+
+function buildSttPrompt(name: string): SttPromptText {
+	return {
+		description:
+			`Transcribe a local audio file via the local whisper-server HTTP endpoint. ` +
+			`Returns the transcript text.`,
+		promptSnippet: `Transcribe a local audio file via whisper-server (returns text).`,
+		promptGuidelines: [
+			`Use ${name} when the user asks you to transcribe a local audio file, or when you need to read the contents of a voice note referenced by path.`,
+			`${name} POSTs to the local whisper-server (default http://127.0.0.1:8080). The result is the transcript text.`,
+			`Incoming Telegram voice/audio messages are already transcribed automatically by the inbound echo pipeline — only call ${name} for files the user has not already sent.`,
+		],
+	};
+}
+
 // --- synthesize_voice ---
 
-const TTS_GUIDELINES = [
-	"Use synthesize_voice when the user explicitly asks for a voice reply, when a voice memo would convey the answer more naturally than text, or to read a file aloud.",
-	"synthesize_voice only writes a file — to deliver it to the user, call the bridge's telegram_attach tool with the returned path.",
-	"Do NOT use synthesize_voice as a turn-reply voice — the bridge handles automatic voice replies (driven by voice.replyMode in telegram.json). This tool is for ad-hoc voice.",
-];
+export interface RegisterTtsArgs {
+	pi: ExtensionAPI;
+	agentDir: string;
+	nameOverride: string | undefined;
+	tts: ResolvedTtsDefaults;
+}
 
-export function registerSynthesizeVoiceTool(
-	pi: ExtensionAPI,
-	agentDir: string,
-	cfg: ToolNameConfig["tts"],
-): void {
-	const toolName = cfg?.name ?? "synthesize_voice";
+export function registerSynthesizeVoiceTool(args: RegisterTtsArgs): void {
+	const { pi, agentDir, nameOverride, tts } = args;
+	const name = nameOverride ?? "synthesize_voice";
+	const prompt = buildTtsPrompt(name);
+
 	pi.registerTool({
-		name: toolName,
+		name,
 		label: "Synthesize voice (TTS)",
-		description:
-			"Convert text to a Telegram-ready OGG/Opus voice file via MiniMax TTS. Returns the file path. Use the bridge's telegram_attach tool to deliver it to the user.",
-		promptSnippet: "Synthesize text to an OGG/Opus voice file (returns path; pair with telegram_attach to send).",
-		promptGuidelines: TTS_GUIDELINES,
+		description: prompt.description,
+		promptSnippet: prompt.promptSnippet,
+		promptGuidelines: prompt.promptGuidelines,
 		parameters: Type.Object({
 			text: Type.String({ description: "Text to speak (≤10k chars, ≤1k per chunk for legacy models)" }),
-			voice: Type.Optional(Type.String({ description: `Voice ID. Default: ${DEFAULT_TTS_VOICE}` })),
-			lang: Type.Optional(Type.String({ description: `Language boost. Default: ${DEFAULT_TTS_LANG}` })),
-			model: Type.Optional(Type.String({ description: `TTS model ID. Default: ${DEFAULT_TTS_MODEL}` })),
+			voice: Type.Optional(Type.String({ description: `Voice ID. Default: ${tts.voice}` })),
+			lang: Type.Optional(Type.String({ description: `Language boost. Default: ${tts.lang}` })),
+			model: Type.Optional(Type.String({ description: `TTS model ID. Default: ${tts.model}` })),
 			speed: Type.Optional(Type.Number({ description: "Speed multiplier. Default: 1.0" })),
 		}),
 		async execute(_toolCallId, params) {
@@ -89,12 +128,12 @@ export function registerSynthesizeVoiceTool(
 			try {
 				await voiceReplySynthesize({
 					text: params.text,
-					voice: params.voice ?? DEFAULT_TTS_VOICE,
-					lang: params.lang ?? DEFAULT_TTS_LANG,
-					model: params.model ?? DEFAULT_TTS_MODEL,
+					voice: params.voice ?? tts.voice,
+					lang: params.lang ?? tts.lang,
+					model: params.model ?? tts.model,
 					speed: params.speed ?? 1.0,
 					oggPath,
-					timeoutMs: TTS_TIMEOUT_MS,
+					timeoutMs: tts.timeoutMs,
 					quiet: true,
 				});
 			} catch (err) {
@@ -119,40 +158,39 @@ export function registerSynthesizeVoiceTool(
 
 // --- transcribe_audio ---
 
-const STT_GUIDELINES = [
-	"Use transcribe_audio when the user asks you to transcribe a local audio file, or when you need to read the contents of a voice note referenced by path.",
-	"transcribe_audio POSTs to the local whisper-server (default http://127.0.0.1:8080). The result is the transcript text.",
-	"Incoming Telegram voice/audio messages are already transcribed automatically by the inbound echo pipeline — only call transcribe_audio for files the user has not already sent.",
-];
+export interface RegisterSttArgs {
+	pi: ExtensionAPI;
+	agentDir: string;
+	nameOverride: string | undefined;
+	stt: ResolvedSttDefaults;
+}
 
-export function registerTranscribeAudioTool(
-	pi: ExtensionAPI,
-	agentDir: string,
-	cfg: ToolNameConfig["stt"],
-): void {
-	const toolName = cfg?.name ?? "transcribe_audio";
+export function registerTranscribeAudioTool(args: RegisterSttArgs): void {
+	const { pi, agentDir, nameOverride, stt } = args;
+	const name = nameOverride ?? "transcribe_audio";
+	const prompt = buildSttPrompt(name);
+
 	pi.registerTool({
-		name: toolName,
+		name,
 		label: "Transcribe audio (STT)",
-		description:
-			"Transcribe a local audio file via the local whisper-server HTTP endpoint. Returns the transcript text.",
-		promptSnippet: "Transcribe a local audio file via whisper-server (returns text).",
-		promptGuidelines: STT_GUIDELINES,
+		description: prompt.description,
+		promptSnippet: prompt.promptSnippet,
+		promptGuidelines: prompt.promptGuidelines,
 		parameters: Type.Object({
 			inputPath: Type.String({ description: "Absolute path to the audio file on disk" }),
-			lang: Type.Optional(Type.String({ description: `BCP-47 / ISO-639-1 language code. Default: ${DEFAULT_STT_LANG}` })),
-			baseUrl: Type.Optional(Type.String({ description: "Override whisper-server base URL. Default: $WHISPER_SERVER_URL or http://127.0.0.1:8080" })),
+			lang: Type.Optional(Type.String({ description: `BCP-47 / ISO-639-1 language code. Default: ${stt.lang}` })),
+			baseUrl: Type.Optional(Type.String({ description: `Override whisper-server base URL. Default: ${stt.baseUrl}` })),
 		}),
 		async execute(_toolCallId, params) {
 			const transcript = (await whisperTranscribe({
 				inputPath: params.inputPath,
-				lang: params.lang ?? DEFAULT_STT_LANG,
-				timeoutMs: STT_TIMEOUT_MS,
+				lang: params.lang ?? stt.lang,
+				timeoutMs: stt.timeoutMs,
 				baseUrl: params.baseUrl,
 			})).trim();
 			return {
 				content: [{ type: "text", text: transcript }],
-				details: { inputPath: params.inputPath, lang: params.lang ?? DEFAULT_STT_LANG, length: transcript.length },
+				details: { inputPath: params.inputPath, lang: params.lang ?? stt.lang, length: transcript.length },
 			};
 		},
 	});

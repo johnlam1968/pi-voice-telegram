@@ -9,16 +9,29 @@
  * v0.7.0: auto-seed a default settings file on first run. When the file
  * is missing, write a safe default that matches the v0.5.0 behavior
  * (echo on, tools off) so the file appearing is a no-op for behavior.
- * The operator can then edit it to enable tools or disable the echo.
  * Auto-seed is idempotent — it only fires when the file is absent; an
  * existing file (operator-edited or hand-placed) is never overwritten.
+ *
+ * v0.8.0: per-extension TTS and STT defaults move into the settings file
+ * (replacing env-var-only configuration). Resolution order: explicit
+ * JSON value > env var > hardcoded default. Env vars still work as
+ * fallbacks, so the cluster's `docker-compose.yaml` doesn't need to
+ * change. The new fields are:
+ *
+ *   tts.voice       (was PI_MM_TTS_VOICE,        default "Cantonese_PlayfulMan")
+ *   tts.lang        (was PI_MM_TTS_LANG,         default "Chinese,Yue")
+ *   tts.model       (was PI_MM_TTS_MODEL,        default "speech-2.8-hd")
+ *   tts.timeoutMs   (was PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS, default 30000)
+ *   stt.lang        (was PI_TELEGRAM_LANG,       default "yue")
+ *   stt.baseUrl     (was WHISPER_SERVER_URL,     default "http://127.0.0.1:8080")
+ *   stt.timeoutMs   (was PI_TELEGRAM_STT_TIMEOUT_MS, default 60000)
  *
  * Settings are read once per `session_start`. Reload via session restart
  * (or `/reload` if the host agent supports it). The synthesis provider
  * separately re-reads `telegram.json` on every call so the bridge's
  * settings-UI edits take effect mid-session; this file is not in that
- * hot path because it controls capability registration, which is a
- * session-scoped decision.
+ * hot path because it controls capability registration + per-extension
+ * defaults, both of which are session-scoped decisions.
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -55,12 +68,94 @@ export interface CompanionConfig {
 			name?: string;
 		};
 	};
+	/**
+	 * Per-extension TTS defaults. v0.8.0+: each field overrides the
+	 * corresponding env var; the env var is the fallback when the JSON
+	 * field is absent. None of these need to be set for the extension
+	 * to work — the hardcoded defaults are applied last.
+	 */
+	tts?: {
+		/** Voice ID. Default: `Cantonese_PlayfulMan` (or `$PI_MM_TTS_VOICE`). */
+		voice?: string;
+		/** Language boost. Default: `Chinese,Yue` (or `$PI_MM_TTS_LANG`). */
+		lang?: string;
+		/** TTS model ID. Default: `speech-2.8-hd` (or `$PI_MM_TTS_MODEL`). */
+		model?: string;
+		/** Per-call synthesis timeout in ms. Default: `30000` (or `$PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS`). */
+		timeoutMs?: number;
+	};
+	/**
+	 * Per-extension STT defaults. v0.8.0+: same JSON > env > hardcoded
+	 * layering as `tts.*`.
+	 */
+	stt?: {
+		/** BCP-47 / ISO-639-1 language code. Default: `yue` (or `$PI_TELEGRAM_LANG`). */
+		lang?: string;
+		/** whisper-server base URL. Default: `http://127.0.0.1:8080` (or `$WHISPER_SERVER_URL`). */
+		baseUrl?: string;
+		/** Per-call STT timeout in ms. Default: `60000` (or `$PI_TELEGRAM_STT_TIMEOUT_MS`). */
+		timeoutMs?: number;
+	};
+}
+
+/** Resolved TTS defaults — every field populated, ready to use. */
+export interface ResolvedTtsDefaults {
+	voice: string;
+	lang: string;
+	model: string;
+	timeoutMs: number;
+}
+
+/** Resolved STT defaults — every field populated, ready to use. */
+export interface ResolvedSttDefaults {
+	lang: string;
+	baseUrl: string;
+	timeoutMs: number;
+}
+
+/** Hardcoded TTS fallbacks (used when neither JSON nor env var is set). */
+const TTS_FALLBACKS = {
+	voice: "Cantonese_PlayfulMan",
+	lang: "Chinese,Yue",
+	model: "speech-2.8-hd",
+	timeoutMs: 30_000,
+} as const;
+
+/** Hardcoded STT fallbacks. */
+const STT_FALLBACKS = {
+	lang: "yue",
+	baseUrl: "http://127.0.0.1:8080",
+	timeoutMs: 60_000,
+} as const;
+
+/** Resolve the TTS defaults: JSON > env > hardcoded. */
+export function resolveTtsDefaults(cfg: CompanionConfig | undefined): ResolvedTtsDefaults {
+	return {
+		voice: cfg?.tts?.voice ?? process.env.PI_MM_TTS_VOICE ?? TTS_FALLBACKS.voice,
+		lang: cfg?.tts?.lang ?? process.env.PI_MM_TTS_LANG ?? TTS_FALLBACKS.lang,
+		model: cfg?.tts?.model ?? process.env.PI_MM_TTS_MODEL ?? TTS_FALLBACKS.model,
+		timeoutMs: Number(
+			cfg?.tts?.timeoutMs ?? Number(process.env.PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS) || TTS_FALLBACKS.timeoutMs,
+		),
+	};
+}
+
+/** Resolve the STT defaults: JSON > env > hardcoded. */
+export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSttDefaults {
+	return {
+		lang: cfg?.stt?.lang ?? process.env.PI_TELEGRAM_LANG ?? STT_FALLBACKS.lang,
+		baseUrl: cfg?.stt?.baseUrl ?? process.env.WHISPER_SERVER_URL ?? STT_FALLBACKS.baseUrl,
+		timeoutMs: Number(
+			cfg?.stt?.timeoutMs ?? Number(process.env.PI_TELEGRAM_STT_TIMEOUT_MS) || STT_FALLBACKS.timeoutMs,
+		),
+	};
 }
 
 /**
- * Default config — matches v0.5.0 behavior (echo on, no tools). Written
- * to disk on first run when the file is missing. Safe: an operator who
- * doesn't edit the file gets the same experience as before the upgrade.
+ * Default config — matches v0.5.0 behavior (echo on, no tools, hardcoded
+ * TTS/STT defaults). Written to disk on first run when the file is
+ * missing. Safe: an operator who doesn't edit the file gets the same
+ * experience as before the upgrade.
  */
 const DEFAULT_CONFIG: CompanionConfig = {
 	inbound: { echoEnabled: true },
@@ -118,17 +213,12 @@ export function loadCompanionConfig(): CompanionConfig {
 function seedDefaultConfig(path: string): CompanionConfig {
 	try {
 		writeFileSync(path, JSON.stringify(DEFAULT_CONFIG, null, 2) + "\n", "utf8");
-		// Use console.log rather than recordTelegramRuntimeEvent: the seed
-		// is a normal first-run event, not a runtime error. The operator
-		// will see it once on first session_start after install/upgrade.
 		console.log(
 			`[pi-voice-telegram] Seeded default config at ${path} ` +
 				`(echo: on, tools: off). Edit and restart to enable tools.`,
 		);
 		return DEFAULT_CONFIG;
 	} catch {
-		// Read-only FS, permission denied, etc. Fall through to empty
-		// config; the extension's in-memory defaults still apply.
 		return {};
 	}
 }
