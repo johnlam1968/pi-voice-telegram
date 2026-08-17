@@ -421,7 +421,7 @@ export function registerConfigWriteTool(pi: ExtensionAPI): void {
 						text: `Wrote ${result.key} in ${result.path}.\n` +
 							`Old: ${JSON.stringify(result.oldValue)}\n` +
 							`New: ${JSON.stringify(result.newValue)}\n\n` +
-							`Restart the agent session for this change to take effect.`,
+							`The change takes effect on the next turn (hot-reload is on, v0.14.0+). No session restart needed.`,
 					},
 				],
 				details: {
@@ -455,7 +455,7 @@ const CONFIG_RESET_PROMPT = {
 	promptGuidelines: [
 		"Use pi_voice_telegram_config_reset when the operator asks to reset, roll back, fill in missing fields, or migrate the file to the current schema. Especially useful after upgrading the extension (a new schema version may add fields that the existing file doesn't have).",
 		"The tool does NOT take any parameters — it always walks the bundled schema and applies defaults to missing fields. Operator-set values are preserved. The result reports which dotted paths were added (e.g., 'tools.writable', 'stt.timeoutMs').",
-		"After a successful reset, tell the operator: 'restart the session for the reset to take effect. Your previous settings are in ~/.pi/agent/pi-voice-telegram.json.bak.<timestamp>'. If they want to keep their old values, the backup is recoverable via `cp`.",
+		"After a successful reset, tell the operator: 'the migration takes effect on the next turn (hot-reload is on, v0.14.0+). No session restart needed. Your previous settings are in ~/.pi/agent/pi-voice-telegram.json.bak.<timestamp>'. If they want to keep their old values, the backup is recoverable via `cp`.",
 	],
 };
 
@@ -482,7 +482,7 @@ export function registerConfigResetTool(pi: ExtensionAPI): void {
 							(result.backupPath
 								? `\nPrevious content backed up to: ${result.backupPath}\n`
 								: "\nNo previous file to back up.\n") +
-							`\nRestart the agent session for the migration to take effect. ` +
+							`\nThe migration takes effect on the next turn (hot-reload is on, v0.14.0+). No session restart needed. ` +
 							(result.backupPath
 								? `To recover the previous settings: cp ${result.backupPath} ${result.path}`
 								: "There was no previous content."),
