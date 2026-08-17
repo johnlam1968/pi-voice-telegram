@@ -51,6 +51,7 @@
   "files": [
     "*.ts",
     "package.json",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ]
 }
