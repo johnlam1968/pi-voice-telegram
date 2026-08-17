@@ -44,6 +44,20 @@
  * what the user gets. The companion settings file is a strictly
  * opt-in dial for capability registration.
  *
+ * v0.10.0: added a third LLM tool, `pi_voice_telegram_schema`, that
+ *         returns the companion settings JSON Schema as text. The
+ *         LLM can call it to discover what knobs are available, what
+ *         their types/defaults/valid values are, before suggesting
+ *         edits. The schema is the same one linked from each
+ *         settings file's `$schema` field. v0.9.0 shipped the
+ *         schema itself; v0.10.0 ships the LLM-facing surface for
+ *         it. The tool is registered whenever the tool surface is
+ *         enabled (it's documentation, not capability — it has no
+ *         side effects).
+ * v0.9.0: settings file is self-describing. `$schema` + `_hint`
+ *         fields added to the seeded `pi-voice-telegram.json`;
+ *         `pi-voice-telegram.schema.json` shipped in the repo and
+ *         the npm package for editor + tool introspection.
  * v0.8.0: per-extension TTS/STT defaults move into the settings file
  *         (`tts.voice`, `tts.lang`, `tts.model`, `tts.timeoutMs`,
  *         `stt.lang`, `stt.baseUrl`, `stt.timeoutMs`). Resolution:
@@ -101,6 +115,7 @@ import {
 	resolveTtsDefaults,
 } from "./config.js";
 import {
+	registerPiVoiceTelegramSchemaTool,
 	registerSynthesizeVoiceTool,
 	registerTranscribeAudioTool,
 } from "./tools.js";
@@ -154,9 +169,13 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		}
 
 		// (3) LLM tool surface — opt-in via `tools.enabled: true` in
-		// the companion settings file. The two tools are independent;
-		// `tools.tts.enabled` and `tools.stt.enabled` can be flipped
-		// separately. See `tools.ts` for the per-tool promptGuidelines.
+		// the companion settings file. The TTS/STT tools are gated
+		// individually on `tools.tts.enabled` / `tools.stt.enabled`.
+		// The schema-discovery tool (`pi_voice_telegram_schema`) is
+		// always registered when `tools.enabled` is true, since it's
+		// documentation rather than an action — it can't make any
+		// side effects, only return the schema text. See `tools.ts`
+		// for the per-tool promptGuidelines.
 		if (cfg.tools?.enabled === true) {
 			if (cfg.tools.tts?.enabled !== false) {
 				registerSynthesizeVoiceTool({
@@ -174,6 +193,10 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 					stt: sttDefaults,
 				});
 			}
+			// Schema tool: always on when the tool surface is on.
+			// It's documentation, not capability, and is useful
+			// regardless of whether TTS/STT are individually enabled.
+			registerPiVoiceTelegramSchemaTool(pi);
 		}
 
 		// Suppress unused-variable warnings for sttDefaults — the

@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.9.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema.
+**Status:** v0.10.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added a third LLM tool, `pi_voice_telegram_schema`, that returns the schema as text.
 
 ## What this is
 
@@ -166,7 +166,26 @@ The env-var layer is preserved as a fallback so the cluster's `docker-compose.ya
 
 **Why not put the docs in `_hint` per-field instead of using JSON Schema?** JSON Schema is the standard for documenting JSON files; editors and tools (jq, ajv, IDEs, LLMs) already understand it. Inlining long descriptions into the JSON would make the file ~5× larger and force every consumer to parse comments. The `$schema` + `_hint` split keeps the data minimal and the documentation external. The `_hint` is just a one-line pointer to the schema for `cat`-ing the file.
 
-**Future LLM-side discovery (deferred to v0.9+ / v1.0+):** the LLM doesn't currently have a way to read `pi-voice-telegram.schema.json` because it lives in the npm package, not the workspace. A `pi_voice_telegram_schema` tool that returns the schema content as a string would let the LLM introspect the structure on demand — useful for the v0.9+ agent-modifies-config feature.
+## v0.10.0 — `pi_voice_telegram_schema` tool (shipped)
+
+**Why:** v0.9.0 shipped the schema for editor + human consumption, but the LLM still couldn't read it directly (the schema lives in the npm package, not the agent's working dir `/workspace`). The LLM could see the tool descriptions (which were templated against the resolved name) but couldn't introspect available knobs on demand — e.g. before suggesting an edit to the companion file. v0.10.0 closes that gap by registering a third tool that returns the schema as text.
+
+**What shipped:**
+
+- `registerPiVoiceTelegramSchemaTool(pi)` in `tools.ts`. Loads `pi-voice-telegram.schema.json` from the extension's npm package directory at module load (via `import.meta.url` + `readFileSync`). Returns the full schema by default; with a `key` parameter, returns just one section.
+- Per-key lookup walks dotted paths like `tts.voice` and falls back from `obj[seg]` to `obj.properties[seg]` so the agent can use either short form (`tts.voice`) or explicit form (`properties.tts.properties.voice`).
+- `index.ts` registers the schema tool whenever `tools.enabled` is true, regardless of the per-tool TTS/STT flags. Schema is documentation, not capability — it has no side effects, so it's safe to always register.
+- `package.json` `files` whitelist now includes `pi-voice-telegram.schema.json` so the schema ships with the npm package.
+- `package.json` — bumped to v0.10.0.
+
+**Tested on `pi-agent-john` on 2026-08-17:**
+
+| # | Probe | Result |
+|---|---|---|
+| 1 | "what voice tools do you have?" | Pass — agent lists all three tools including `pi_voice_telegram_schema` |
+| 2 | "what is the default language for tts?" | Pass — agent calls `pi_voice_telegram_schema` with `key: "tts"`, gets the `tts` schema section, reports `Chinese,Yue` as the default. No fallback call needed. |
+
+**Bug fixed during testing:** the first version of the walker only did `obj[seg]`, so the agent's first attempt with `key: "tts"` failed with "key path 'tts' not found". Added the `obj.properties[seg]` fallback so short form works as the agent expected. Fixed and re-deployed in the same commit cycle.
 
 ## Open design questions (deferred from v0.6.0)
 
@@ -269,3 +288,4 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.7.0** — auto-seed `pi-voice-telegram.json` on first run (when missing). Operator-facing discoverability for the new settings file. 6-knob test matrix completed against `pi-agent-john`.
 - **v0.8.0** — per-extension TTS/STT defaults in JSON (`tts.*`, `stt.*`) with JSON > env > hardcoded layering. Templated prompt text against resolved tool name. 3 tests passed against `pi-agent-john`. Auto-seeded `DEFAULT_CONFIG` and `examples/pi-voice-telegram.json` brought up to date.
 - **v0.9.0** — self-describing settings file. `pi-voice-telegram.schema.json` (JSON Schema with descriptions/examples for every key) shipped in the repo; `$schema` + `_hint` fields added to the seeded file. Editors and LLMs get inline hints; humans get an at-a-glance pointer in `cat` output.
+- **v0.10.0** — `pi_voice_telegram_schema` tool. The LLM can now call a tool that returns the companion settings schema as text (full or per-key). Useful for the agent-modifies-config feature (planned v0.11+).

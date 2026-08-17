@@ -35,6 +35,10 @@
  *   - whisper-stt.ts                   → transcribe (STT pipeline)
  */
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
@@ -191,6 +195,115 @@ export function registerTranscribeAudioTool(args: RegisterSttArgs): void {
 			return {
 				content: [{ type: "text", text: transcript }],
 				details: { inputPath: params.inputPath, lang: params.lang ?? stt.lang, length: transcript.length },
+			};
+		},
+	});
+}
+
+// --- pi_voice_telegram_schema (v0.10.0) ---
+//
+// Returns the companion settings JSON Schema so the LLM can introspect
+// the available knobs, their types, defaults, and valid values on
+// demand. The schema lives in `pi-voice-telegram.schema.json` in the
+// npm package and is the same one linked from each settings file's
+// `$schema` field. Loading is best-effort: if the file can't be read
+// (e.g. the npm package was installed without the schema), the tool
+// returns a helpful error.
+
+const SCHEMA_FILE_NAME = "pi-voice-telegram.schema.json";
+
+function loadSchemaText(): { ok: true; text: string } | { ok: false; error: string } {
+	try {
+		const here = dirname(fileURLToPath(import.meta.url));
+		const path = join(here, SCHEMA_FILE_NAME);
+		const text = readFileSync(path, "utf8");
+		return { ok: true, text };
+	} catch (err) {
+		return { ok: false, error: (err as Error).message };
+	}
+}
+
+const SCHEMA_PROMPT = {
+	description:
+		"Return the JSON Schema for the pi-voice-telegram companion settings file. The schema is the canonical reference for every knob: type, default, allowed values, and a human description for each. Use this when you need to know what knobs exist, what their defaults are, what values are valid, or what a key means. Optionally pass a `key` to fetch just one section (e.g. 'tts.voice', 'inbound.echoEnabled', 'tools').",
+	promptSnippet: "Returns the pi-voice-telegram settings schema (knobs, types, defaults, examples).",
+	promptGuidelines: [
+		"Use pi_voice_telegram_schema when you need to know what knobs are available, what their defaults are, or what values are valid. Especially useful before suggesting edits to the companion settings file.",
+		"The returned text is the same JSON Schema linked from each settings file's $schema field. It includes descriptions, defaults, and examples for every key.",
+		"Pass the `key` parameter to fetch a specific section (e.g. key='tts.voice' returns just the description/default/examples for that one field) rather than reading the whole schema.",
+	],
+};
+
+export function registerPiVoiceTelegramSchemaTool(pi: ExtensionAPI): void {
+	pi.registerTool({
+		name: "pi_voice_telegram_schema",
+		label: "pi-voice-telegram settings schema",
+		description: SCHEMA_PROMPT.description,
+		promptSnippet: SCHEMA_PROMPT.promptSnippet,
+		promptGuidelines: SCHEMA_PROMPT.promptGuidelines,
+		parameters: Type.Object({
+			key: Type.Optional(
+				Type.String({
+					description:
+						"Optional dotted path into the schema. E.g. 'tts', 'tts.voice', 'inbound.echoEnabled', 'tools.tts.name'. If omitted, the full schema is returned.",
+				}),
+			),
+		}),
+		async execute(_toolCallId, params) {
+			const loaded = loadSchemaText();
+			if (!loaded.ok) {
+				throw new Error(
+					`pi_voice_telegram_schema: cannot read ${SCHEMA_FILE_NAME} from the extension's npm package: ${loaded.error}. ` +
+						`This usually means the package was installed without the schema file. ` +
+						`Reinstall pi-voice-telegram@>=0.10.0 or check that pi-voice-telegram.schema.json is present in the npm package.`,
+				);
+			}
+			if (!params.key) {
+				return {
+					content: [{ type: "text", text: loaded.text }],
+					details: { mode: "full", length: loaded.text.length },
+				};
+			}
+			// Per-key lookup. We parse the JSON and walk the path; for
+			// any segment, we try `obj[seg]` first and fall back to
+			// `obj.properties[seg]` so the agent can use either the
+			// short form (`tts.voice`) or the explicit form
+			// (`properties.tts.properties.voice`).
+			const schema = JSON.parse(loaded.text) as Record<string, unknown>;
+			const segments = params.key.split(".");
+			let current: unknown = schema;
+			const trail: string[] = [];
+			for (const seg of segments) {
+				trail.push(seg);
+				if (current && typeof current === "object") {
+					const obj = current as Record<string, unknown>;
+					if (seg in obj) {
+						current = obj[seg];
+						continue;
+					}
+					// Fallback: try the `properties` namespace.
+					const props = obj["properties"];
+					if (props && typeof props === "object" && seg in (props as Record<string, unknown>)) {
+						current = (props as Record<string, unknown>)[seg];
+						continue;
+					}
+				}
+				const topLevel = Object.keys(schema)
+					.filter((k) => !k.startsWith("$"))
+					.join("', '");
+				throw new Error(
+					`pi_voice_telegram_schema: key path '${trail.join(".")}' not found in schema. ` +
+						`Try a top-level key (e.g. '${topLevel}') or one of its subkeys (e.g. 'tts.voice', 'stt.lang').`,
+				);
+			}
+			return {
+				content: [
+					{
+						type: "text",
+						text: JSON.stringify(current, null, 2),
+					},
+				],
+				details: { mode: "key", key: params.key, found: true },
 			};
 		},
 	});

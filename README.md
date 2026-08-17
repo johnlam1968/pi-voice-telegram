@@ -6,9 +6,10 @@ The extension provides three capabilities. The bridge's `telegram.json` decides 
 
 1. **Outbound TTS** — registers a voice synthesis provider on the bridge. The bridge calls it when `voice.replyMode` says so. The provider returns `{ audioPath, transcriptText }` when `voice.sendTranscript: true` (voice bubble with caption) or just the `oggPath` when `false` (voice bubble only).
 2. **Inbound echo** — registers a raw update handler that detects voice / audio messages, runs the configured STT client (`whisper-stt.ts` → `whisper-server`), and sends the user a `🎙️ "<i>transcript</i>"` reply. A programmatic inbound handler feeds the same transcript into the agent prompt. On by default; turn off via `inbound.echoEnabled: false` in the companion settings file.
-3. **LLM tool surface (v0.6.0+, opt-in)** — when `tools.enabled: true` in the companion settings file, registers two additional tools the agent can call explicitly:
+3. **LLM tool surface (v0.6.0+, opt-in)** — when `tools.enabled: true` in the companion settings file, registers three additional tools the agent can call explicitly:
    - `synthesize_voice` — wraps `voice-reply.ts` + `mm-tts.ts`. Writes a Telegram-ready OGG/Opus file and returns the path. The agent delivers it to the bound chat using the bridge's `telegram_attach` tool. Useful when `voice.replyMode` is `hidden` and the user has asked for a voice reply, or for ad-hoc voice (e.g. reading a file aloud).
    - `transcribe_audio` — wraps `whisper-stt.transcribe()`. Transcribes a local audio file via `whisper-server` and returns the transcript text.
+   - `pi_voice_telegram_schema` (v0.10.0+) — returns the companion settings JSON Schema as text. The LLM can call it to discover what knobs exist, their types, defaults, and valid values, before suggesting edits. Always registered when `tools.enabled` is true (it's documentation, not capability — no side effects). Pass the `key` parameter to fetch a specific section (e.g. `tts.voice`, `inbound.echoEnabled`); omit it for the full schema.
 
 The extension does not impose any UX policy of its own. Whatever the operator sets in `telegram.json` (or via the bridge's settings UI) is what the user gets.
 
@@ -327,6 +328,7 @@ See [`PLAN.md`](./PLAN.md) for the design discussion, open questions, and roadma
 | `registerTelegramInboundHandler` (from `@llblab/pi-telegram/inbound`) | Reads the cached transcript and returns it so the agent prompt sees the same text the user saw in the echo. |
 | `pi.registerTool` (from `@earendil-works/pi-coding-agent`) — `synthesize_voice` (v0.6.0+, opt-in) | Wraps `voice-reply.ts`. Writes an OGG/Opus file and returns the path. Pair with the bridge's `telegram_attach` to deliver. |
 | `pi.registerTool` (from `@earendil-works/pi-coding-agent`) — `transcribe_audio` (v0.6.0+, opt-in) | Wraps `whisper-stt.transcribe()`. Returns the transcript text for a local audio file. |
+| `pi.registerTool` (from `@earendil-works/pi-coding-agent`) — `pi_voice_telegram_schema` (v0.10.0+, opt-in) | Returns the companion settings JSON Schema as text. Lets the LLM discover knobs/types/defaults/valid values before suggesting edits. Optional `key` param for a single section. |
 
 ## Environment variables
 
