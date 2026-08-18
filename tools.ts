@@ -45,7 +45,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { synthesize as voiceReplySynthesize } from "./voice-reply.js";
-import { transcribe as whisperTranscribe } from "./whisper-stt.js";
+import { detectLanguage, transcribe as whisperTranscribe } from "./whisper-stt.js";
 import {
 	type ResolvedSttDefaults,
 	type ResolvedTtsDefaults,
@@ -114,6 +114,30 @@ function buildSttPrompt(name: string): SttPromptText {
 
 // --- synthesize_voice ---
 
+/**
+ * Loose language-match check, used by `synthesize_voice`'s post-synthesis
+ * self-check. whisper-server returns detected language as a lowercase
+ * English name ("japanese", "cantonese", "english"). The operator's
+ * `tts.lang` is MiniMax's "Language,Dialect" format ("Japanese",
+ * "Chinese,Yue", "English,American"). Match rules:
+ *
+ *   1. Direct case-insensitive substring (e.g. "japanese" in "Japanese")
+ *   2. First half of a "Language,Dialect" string (e.g. "Chinese" from
+ *      "Chinese,Yue" matches "chinese"; "Cantonese" does not match
+ *      "Chinese,Yue" — the operator asked for Yue, not generic Chinese)
+ *   3. Otherwise: no match
+ *
+ * Duplicated from synthesis-provider.ts to keep tools.ts self-contained.
+ * If this gets a third caller, move to a shared helper module.
+ */
+function isLanguageMatch(detected: string, requested: string): boolean {
+	const d = detected.toLowerCase();
+	const r = requested.toLowerCase();
+	if (r.includes(d) || d.includes(r)) return true;
+	const first = r.split(",")[0]?.trim() ?? "";
+	return first === d;
+}
+
 export interface RegisterTtsArgs {
 	pi: ExtensionAPI;
 	agentDir: string;
@@ -141,11 +165,13 @@ export function registerSynthesizeVoiceTool(args: RegisterTtsArgs): void {
 		}),
 		async execute(_toolCallId, params) {
 			const oggPath = `${agentDir}/tmp/pi-voice-telegram-tool-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}.ogg`;
+			const effectiveVoice = params.voice ?? tts.voice;
+			const effectiveLang = params.lang ?? tts.lang;
 			try {
 				await voiceReplySynthesize({
 					text: params.text,
-					voice: params.voice ?? tts.voice,
-					lang: params.lang ?? tts.lang,
+					voice: effectiveVoice,
+					lang: effectiveLang,
 					model: params.model ?? tts.model,
 					speed: params.speed ?? 1.0,
 					oggPath,
@@ -158,6 +184,27 @@ export function registerSynthesizeVoiceTool(args: RegisterTtsArgs): void {
 					textLength: params.text.length,
 				});
 				throw err;
+			}
+			// v0.16.0+: best-effort self-check via whisper-stt language
+			// detection. Logs to runtime events; does not change the
+			// tool's return value. Off if `verifyAfterSynthesize` is
+			// false.
+			if (tts.verifyAfterSynthesize) {
+				try {
+					const detected = await detectLanguage({ inputPath: oggPath });
+					recordTelegramRuntimeEvent("pi-voice-telegram/tts-verify", null, {
+						phase: "synthesize_voice",
+						requestedLang: effectiveLang,
+						detectedLanguage: detected.language,
+						confidence: detected.confidence,
+						match: isLanguageMatch(detected.language, effectiveLang),
+					});
+				} catch (err) {
+					recordTelegramRuntimeEvent("pi-voice-telegram/tts-verify", err, {
+						phase: "synthesize_voice.detect",
+						requestedLang: effectiveLang,
+					});
+				}
 			}
 			return {
 				content: [

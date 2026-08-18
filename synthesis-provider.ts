@@ -41,6 +41,7 @@ import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { synthesize as voiceReply } from "./voice-reply.js";
 import { type ResolvedTtsDefaults, resolveTtsDefaults } from "./config.js";
+import { detectLanguage as whisperDetectLanguage } from "./whisper-stt.js";
 
 // --- Configuration (host-side runtime contract) ---
 
@@ -102,6 +103,15 @@ function pickVoiceDefaults(snapshot: TelegramJsonSnapshot): VoiceDefaults {
  * pass an explicit config snapshot if they want to override. v0.8.0+
  * pattern — `index.ts` calls `createMmTtsSynthesisProvider()` once on
  * `session_start`.
+ *
+ * v0.16.0: when `tts.verifyAfterSynthesize` is true, run whisper-stt
+ * language detection on the produced OGG and record the result in the
+ * runtime event log under `category: "pi-voice-telegram/tts-verify"`.
+ * This catches the cross-language "boost" misfires (e.g. voice=
+ * Cantonese_* + lang=Japanese producing audio that's neither) and
+ * gives the operator a per-call signal in the event log. Verification
+ * is best-effort: if the whisper call fails, the synthesis still
+ * succeeds and the error is logged separately.
  */
 export function createMmTtsSynthesisProvider(
   cfg?: { tts?: ResolvedTtsDefaults },
@@ -111,6 +121,7 @@ export function createMmTtsSynthesisProvider(
 	const fallbackVoice = tts.voice;
 	const fallbackModel = tts.model;
 	const fallbackTimeout = tts.timeoutMs;
+	const verifyAfter = tts.verifyAfterSynthesize;
 
 	return async (
 		text: string,
@@ -148,6 +159,26 @@ export function createMmTtsSynthesisProvider(
 			throw err;
 		}
 
+		// v0.16.0+: best-effort self-check. The synthesis already
+		// succeeded; verification failure must not change the result.
+		if (verifyAfter) {
+			try {
+				const detected = await whisperDetectLanguage({ inputPath: oggPath });
+				recordTelegramRuntimeEvent("pi-voice-telegram/tts-verify", null, {
+					requestedLang: lang,
+					detectedLanguage: detected.language,
+					confidence: detected.confidence,
+					match: isLanguageMatch(detected.language, lang),
+					transcriptLength: detected.transcript.length,
+				});
+			} catch (err) {
+				recordTelegramRuntimeEvent("pi-voice-telegram/tts-verify", err, {
+					phase: "detect",
+					requestedLang: lang,
+				});
+			}
+		}
+
 		if (!getTelegramVoiceSendTranscript(snapshot)) {
 			return oggPath;
 		}
@@ -157,6 +188,26 @@ export function createMmTtsSynthesisProvider(
 
 		return { audioPath: oggPath, transcriptText: caption };
 	};
+}
+
+/**
+ * Loose language-match check. whisper-server returns detected language
+ * as a lowercase English name ("japanese", "cantonese", "english").
+ * The operator's `tts.lang` is MiniMax's "Language,Dialect" format
+ * ("Japanese", "Chinese,Yue", "English,American"). Match rules:
+ *
+ *   1. Direct case-insensitive substring (e.g. "japanese" in "Japanese")
+ *   2. First half of a "Language,Dialect" string (e.g. "Chinese" from
+ *      "Chinese,Yue" matches "chinese"; "Cantonese" does not match
+ *      "Chinese,Yue" — the operator asked for Yue, not generic Chinese)
+ *   3. Otherwise: no match
+ */
+function isLanguageMatch(detected: string, requested: string): boolean {
+	const d = detected.toLowerCase();
+	const r = requested.toLowerCase();
+	if (r.includes(d) || d.includes(r)) return true;
+	const first = r.split(",")[0]?.trim() ?? "";
+	return first === d;
 }
 
 /**

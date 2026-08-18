@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.15.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages).
+**Status:** v0.16.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages). v0.16.0 added inline TTS self-check via whisper-stt language detection — every synthesis is verified, result logged under `pi-voice-telegram/tts-verify`.
 
 ## What this is
 
@@ -336,6 +336,46 @@ v0.15.0 closes this gap with an embedded voice catalog and a discovery tool. The
 
 **Live cluster note:** the cluster is on v0.5.0 + the synthesis patch, so the new tool isn't reachable on `pi-agent-john` until v0.15.0 is published. Same blocker as v0.6.0+ features. The user can verify the catalog quality by browsing `voices.json` directly or by reading the script's `LANGUAGE_MAP` for the canonical English-label list.
 
+## v0.16.0 — TTS self-check via whisper-stt language detection (shipped)
+
+**Why:** TTS synthesis can silently produce audio in the wrong language. The cross-language "boost" effect (`voice=Cantonese_* + lang=Japanese`) is a known weirdness — the operator gets audio, but the audio might be in a third language entirely. The v0.5.0 2054 errors were loud failures; the cross-language miss is a silent failure. v0.16.0 adds a per-synthesis self-check that catches it.
+
+The capability was always in `whisper-server` — verbose_json returns `detected_language` + `detected_language_probability` when no `language` form field is sent. The `whisper-stt.ts` client just never exposed it (it always sent a language hint and used `response_format=text`). v0.16.0 adds the missing client support, then wires it into both synthesis paths.
+
+**What shipped:**
+
+- **`detectLanguage()` in `whisper-stt.ts`** — new function. POSTs to `/inference` with no `language` form field and `response_format=verbose_json`. Returns `{ language, confidence, transcript, languageProbabilities? }`. The `language` is whisper's lowercase English name (e.g. "japanese", "cantonese", "english"). `confidence` is `detected_language_probability` (0-1, > 0.5 usually trustworthy, > 0.85 very reliable).
+- **`tts.verifyAfterSynthesize: boolean` setting** — new knob in the companion config, default `true`. Off if you don't want the ~500ms–1s whisper-stt call per synthesis (latency-sensitive paths).
+- **Inline verification in `synthesis-provider.ts`** — after `voiceReply` succeeds, the provider calls `detectLanguage` and records the result in the runtime event log under `category: "pi-voice-telegram/tts-verify"`. Verification failure does NOT fail the synthesis — the audio is still valid. The log entry includes `requestedLang`, `detectedLanguage`, `confidence`, and a `match` boolean.
+- **Same verification in the `synthesize_voice` LLM tool** — covers the ad-hoc agent-driven path. The tool's per-call `voice`/`lang` overrides feed into the comparison (the effective values, not just the defaults).
+- **Loose-match comparison** — `isLanguageMatch(detected, requested)` in both files. Rules:
+  1. Direct case-insensitive substring (e.g. "japanese" in "Japanese")
+  2. First half of a "Language,Dialect" string (e.g. "Chinese" from "Chinese,Yue" matches "chinese"; "Cantonese" does not match "Chinese,Yue" — the operator asked for Yue, not generic Chinese)
+  3. Otherwise: no match
+- **Schema + examples + package.json + `_hint` all updated.** CompanionConfig gains `tts.verifyAfterSynthesize`. ResolvedTtsDefaults gains the field. TTS_FALLBACKS default is `true`. Schema description explains the event log category and the latency cost.
+
+**What `match: true` vs `match: false` means:**
+
+- `true` = detected language matches requested `tts.lang` (loose substring/first-half match). The audio is in the language the operator asked for.
+- `false` = detected language doesn't match. Common case: the cross-language "boost" effect — the operator asked for Korean but whisper heard English (or whatever the audio actually is). The audio is still valid, just not what was asked for.
+
+**Tested on `pi-agent-john` via `docker exec pi-agent-john pi -e ./index.ts -p "..."`:**
+
+| # | Test | `requestedLang` | `detectedLanguage` | `confidence` | `match` |
+|---|---|---|---|---|---|
+| 1 | `synthesize_voice` with defaults (voice=Japanese_OptimisticYouth, lang=Japanese) | Japanese | japanese | 0.957 | ✓ true |
+| 2 | `synthesize_voice` with `lang=Korean` (cross-language boost) | Korean | english | 0.762 | ✗ false |
+
+Test 2 is the headline result — the operator asked for "Korean pronunciation" and the audio came out as English (the cross-language boost effect). Without verification, this would be silent. The log line is enough for the operator to see the mismatch and either fix the config or accept it as a quirk.
+
+**Bug fix during testing:** the `_hint` field in `DEFAULT_CONFIG` was bumped to v0.15.0+ but didn't mention the new tool; updated to v0.16.0+ and added the `tts.verifyAfterSynthesize` mention so operators see what's happening at the top of `cat`-ed config.
+
+**Trade-off accepted:** verification adds a whisper-stt call per synthesis (~500ms–1s on the local whisper-server, more on remote). The synthesis still succeeds if verification fails (best-effort pattern), so the worst case is a missed log entry, not a broken voice reply. Operators who want the latency back can set `tts.verifyAfterSynthesize: false`.
+
+**What v0.16.0 is NOT:** pitch detection, voice-character analysis, or any other acoustic feature. whisper-stt is a transcription model — it gives language and text confidence, not pitch/prosody. For pitch, you'd need librosa + pyin or pyworld (heavy new deps). The user explicitly asked about pitch; the honest answer is that whisper doesn't do it. v0.17+ if/when pitch detection is wanted.
+
+**Live cluster note:** the cluster is on v0.5.0 + synthesis patch, so v0.16.0's verification isn't reachable on `pi-agent-john` until v0.16.0 is published. Same npm-publish blocker as v0.6.0+ features. The `patches/v0.5.0/` directory would need another backport (extend `synthesis-provider.ts` to call `detectLanguage` and log the result) if the operator wants verification on the cluster before the npm publish.
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -451,3 +491,4 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.13.0** — schema-driven reset + proactive evolution. Redesigned `resetConfig` to walk the JSON Schema, fill in MISSING fields with the schema's `default` value, preserve the operator's existing values. Updated the config tool promptGuidelines to encourage the LLM to evolve the config based on observed usage patterns. The schema is now the source of truth for "what fields exist and what their defaults are"; the hardcoded JSON is for first-install auto-seed only.
 - **v0.14.0** — hot-reload the companion settings via `fs.watch` on the directory containing `pi-voice-telegram.json` (200ms debounce, file-level watching detached on Linux/Docker overlay so the directory is watched instead). The `reconfigure()` closure tears down + re-registers all capabilities; the synthesis provider reads the JSON on every call (via the v0.5.0+patch for the cluster) so TTS defaults take effect on the next bridge event. Best-effort: if `fs.watch` fails, the extension logs a warning and falls back to session_start-only behavior.
 - **v0.15.0** — `pi_voice_telegram_list_voices` tool backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages, ~58KB). The agent can now discover valid voice IDs in-band instead of guessing (and getting 2054). The catalog is rebuilt from the upstream page via `scripts/build-voice-catalog.py` and shipped in the npm package. Prompt nudges on `synthesize_voice`, `pi_voice_telegram_config_write`, and `pi_voice_telegram_schema` point at the new tool. The schema's `tts.voice` / `tts.lang` descriptions are updated to note the cross-language voice+lang "boost" semantics.
+- **v0.16.0** — inline TTS self-check via whisper-stt language detection. New `detectLanguage()` in `whisper-stt.ts` exposes the verbose_json detection that whisper-server already supports. New `tts.verifyAfterSynthesize` setting (default true) runs the check after every synthesis in both the bridge path (`synthesis-provider.ts`) and the LLM path (`synthesize_voice` tool). Result logged under `category: "pi-voice-telegram/tts-verify"` with `requestedLang`, `detectedLanguage`, `confidence`, and a `match` boolean. Catches the cross-language "boost" misfires that would otherwise silently produce audio in the wrong language. Adds ~500ms–1s per synthesis; opt out via `tts.verifyAfterSynthesize: false`.

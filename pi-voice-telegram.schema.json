@@ -102,6 +102,12 @@
 					"default": 30000,
 					"description": "Per-call synthesis timeout in ms. Covers both mm-tts HTTP and ffmpeg encoding. Replaces $PI_MM_TTS_VOICE_REPLY_TIMEOUT_MS. Bump if you have long text inputs and see ffmpeg timeouts.",
 					"examples": [15000, 30000, 60000, 120000]
+				},
+				"verifyAfterSynthesize": {
+					"type": "boolean",
+					"default": true,
+					"description": "When true (default), run whisper-stt language detection on every synthesized OGG and record the result in the runtime event log under `category: \"pi-voice-telegram/tts-verify\"`. The event includes the requested `tts.lang`, the detected language (whisper's `detected_language`), confidence, and a `match` boolean. Catches the cross-language 'boost' misfires (e.g. voice=Cantonese_* + lang=Japanese producing audio that's neither) and gives the operator a per-call signal in the event log. Adds ~500ms–1s per synthesis (whisper-stt call). Turn off for latency-sensitive paths. v0.16.0+.",
+					"examples": [true, false]
 				}
 			}
 		},

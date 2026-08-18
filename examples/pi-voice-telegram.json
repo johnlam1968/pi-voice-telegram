@@ -1,6 +1,6 @@
 {
   "$schema": "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-  "_hint": "pi-voice-telegram companion settings (v0.15.0+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog).",
+  "_hint": "pi-voice-telegram companion settings (v0.16.0+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.0: tts.verifyAfterSynthesize (default true) runs whisper-stt language detection on every synthesis and logs the result under `category: \"pi-voice-telegram/tts-verify\"`.",
   "inbound": {
     "echoEnabled": true
   },
@@ -19,7 +19,8 @@
     "voice": "Cantonese_PlayfulMan",
     "lang": "Chinese,Yue",
     "model": "speech-2.8-hd",
-    "timeoutMs": 30000
+    "timeoutMs": 30000,
+    "verifyAfterSynthesize": true
   },
   "stt": {
     "lang": "yue",

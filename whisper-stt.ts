@@ -47,7 +47,39 @@ export interface SttArgs {
 	responseFormat?: string;
 }
 
+/** Public args shape for language detection (no language hint, always verbose_json). */
+export interface DetectArgs {
+	/** Path to the audio file on disk. */
+	inputPath: string;
+	/** Per-call timeout in ms. Default: 30000. */
+	timeoutMs?: number;
+	/** Override the server base URL. */
+	baseUrl?: string;
+}
+
+/**
+ * Result of a language-detection call. The detected `language` is
+ * whisper's lowercase English name (`"japanese"`, `"cantonese"`,
+ * `"english"`, ...). `confidence` is whisper's `detected_language_probability`
+ * in the 0–1 range; values > 0.5 are usually trustworthy, > 0.85
+ * very reliable. `transcript` is what whisper heard during detection —
+ * useful for double-checking that the audio decoded cleanly.
+ * `languageProbabilities` is the full per-language distribution
+ * (optional, only populated when verbose_json returns it).
+ */
+export interface DetectResult {
+	/** Detected language (lowercase English name). */
+	language: string;
+	/** Confidence in the detection, 0-1. */
+	confidence: number;
+	/** Transcript produced during detection. */
+	transcript: string;
+	/** Full per-language probability distribution. */
+	languageProbabilities?: Record<string, number>;
+}
+
 const DEFAULT_TIMEOUT_MS = 60_000;
+const DEFAULT_DETECT_TIMEOUT_MS = 30_000;
 const DEFAULT_BASE_URL = "http://127.0.0.1:8080";
 const DEFAULT_LANG = "yue";
 const DEFAULT_RESPONSE_FORMAT = "text";
@@ -150,11 +182,129 @@ export async function transcribe(args: SttArgs): Promise<string> {
 	return trimmed;
 }
 
+/**
+ * Detect the language of an audio file via whisper-server's verbose_json
+ * response. Does NOT send the `language` form field — that triggers
+ * whisper-server's auto-detect path and returns `detected_language` +
+ * `detected_language_probability` in the JSON body. The transcript is
+ * also returned (whisper transcribes in the detected language).
+ *
+ * Use this as a self-check after a TTS synthesis: did the audio come
+ * out in the language we asked for? Useful for catching the
+ * "cross-language voice+lang boost" misfires (e.g. voice=Cantonese_*
+ * + lang=Japanese producing audio that's neither Cantonese nor
+ * Japanese, or the operator misconfigured the boost).
+ *
+ * v0.16.0: initial implementation. The endpoint already existed in
+ * whisper-server; the client just didn't expose it.
+ *
+ * @throws WhisperSttError on validation, network, or server failures.
+ */
+export async function detectLanguage(args: DetectArgs): Promise<DetectResult> {
+	if (!args.inputPath) {
+		throw new WhisperSttError("whisper-stt: missing inputPath", 1);
+	}
+
+	const baseUrl = (args.baseUrl ?? process.env.WHISPER_SERVER_URL ?? DEFAULT_BASE_URL).replace(
+		/\/$/,
+		"",
+	);
+	const timeoutMs = args.timeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS;
+	const url = `${baseUrl}/inference`;
+
+	let bytes: Buffer;
+	try {
+		bytes = await readFile(args.inputPath);
+	} catch (err) {
+		throw new WhisperSttError(
+			`whisper-stt: cannot read ${args.inputPath}: ${(err as Error).message}`,
+			1,
+			{ inputPath: args.inputPath },
+		);
+	}
+
+	const boundary = `----pi${Date.now().toString(36)}`;
+	const filename = args.inputPath.split("/").pop() ?? "voice.ogg";
+	// Pass `null` for the language field — that's what triggers detection.
+	const body = buildMultipart(boundary, filename, bytes, null, "verbose_json");
+
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+	let res: Response;
+	try {
+		res = await fetch(url, {
+			method: "POST",
+			signal: controller.signal,
+			headers: {
+				"Content-Type": `multipart/form-data; boundary=${boundary}`,
+				"Content-Length": String(body.length),
+			},
+			body,
+		});
+	} catch (err) {
+		clearTimeout(timer);
+		if ((err as Error).name === "AbortError") {
+			throw new WhisperSttError(
+				`whisper-stt: detectLanguage timeout after ${timeoutMs}ms`,
+				2,
+				{ baseUrl, url },
+			);
+		}
+		throw new WhisperSttError(
+			`whisper-stt: detectLanguage network error: ${(err as Error).message}`,
+			2,
+			{ baseUrl, url },
+		);
+	}
+	clearTimeout(timer);
+
+	if (!res.ok) {
+		const detail = (await res.text().catch(() => "")).slice(0, 500);
+		throw new WhisperSttError(
+			`whisper-stt: detectLanguage HTTP ${res.status} from ${url}\n${detail}`,
+			res.status >= 500 ? 4 : 3,
+			{ baseUrl, url, status: res.status, detail: detail.slice(0, 200) },
+		);
+	}
+
+	const jsonText = await res.text();
+	let parsed: Record<string, unknown>;
+	try {
+		parsed = JSON.parse(jsonText) as Record<string, unknown>;
+	} catch (err) {
+		throw new WhisperSttError(
+			`whisper-stt: detectLanguage: server returned non-JSON: ${jsonText.slice(0, 200)}`,
+			3,
+			{ baseUrl, url, response: jsonText.slice(0, 200) },
+		);
+	}
+
+	const language = (parsed.detected_language as string) ?? (parsed.language as string) ?? "";
+	const confidence =
+		typeof parsed.detected_language_probability === "number"
+			? (parsed.detected_language_probability as number)
+			: 0;
+	const transcript =
+		typeof parsed.text === "string" ? (parsed.text as string).trim() : "";
+	const languageProbabilities = (parsed.language_probabilities as Record<string, number>) || undefined;
+
+	if (!language) {
+		throw new WhisperSttError(
+			`whisper-stt: detectLanguage: response had no detected_language field: ${jsonText.slice(0, 300)}`,
+			3,
+			{ baseUrl, url, response: jsonText.slice(0, 200) },
+		);
+	}
+
+	return { language, confidence, transcript, languageProbabilities };
+}
+
 function buildMultipart(
 	boundary: string,
 	filename: string,
 	fileBytes: Buffer,
-	lang: string,
+	lang: string | null,
 	responseFormat: string,
 ): Buffer {
 	const CRLF = "\r\n";
@@ -165,15 +315,26 @@ function buildMultipart(
 				`Content-Type: audio/ogg${CRLF}${CRLF}`,
 		),
 		fileBytes,
+	];
+	// Only include the `language` field if a hint was provided. Omitting
+	// it triggers whisper-server's language-detection path, which is what
+	// `detectLanguage` relies on.
+	if (lang !== null) {
+		parts.push(
+			Buffer.from(
+				`${CRLF}--${boundary}${CRLF}` +
+					`Content-Disposition: form-data; name="language"${CRLF}${CRLF}` +
+					`${lang}${CRLF}`,
+			),
+		);
+	}
+	parts.push(
 		Buffer.from(
 			`${CRLF}--${boundary}${CRLF}` +
-				`Content-Disposition: form-data; name="language"${CRLF}${CRLF}` +
-				`${lang}${CRLF}` +
-				`--${boundary}${CRLF}` +
 				`Content-Disposition: form-data; name="response_format"${CRLF}${CRLF}` +
 				`${responseFormat}${CRLF}` +
 				`--${boundary}--${CRLF}`,
 		),
-	];
+	);
 	return Buffer.concat(parts);
 }
