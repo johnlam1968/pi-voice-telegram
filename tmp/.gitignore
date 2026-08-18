@@ -1,0 +1,11 @@
+# tmp/ holds code-analysis artifacts that should NOT be tracked in git.
+# Local-only, regenerable, and ephemeral by nature. Kept on disk so the
+# work survives /tmp/ cleanups and so future iterations can find the
+# analysis that informed earlier version work.
+#
+# The README.md (this directory's convention doc) IS tracked.
+# Everything else matches `*` and is ignored.
+
+*
+!/.gitignore
+!/README.md

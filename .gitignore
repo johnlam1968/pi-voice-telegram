@@ -29,3 +29,4 @@ out/
 # `docs/` from the latest copy in the agent's workspace.
 docs/MINIMAX-T2A-FINDINGS.md
 docs/TELEGRAM-VOICE-ECHO-FINDINGS.md
+docs/CODE-FLOW.md
