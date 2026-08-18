@@ -407,6 +407,16 @@ npm test
 
 ## Changelog
 
+### v0.16.7 — one place that does the work (transcription provider redesign)
+
+The previous design had two handlers: an update handler that downloaded + transcribed + cached + sent the echo, and an inbound handler that did its own on-demand transcribe on cache miss. The same audio was sometimes transcribed twice, and the update handler's separate download path could fail silently (no byte-count verification — an empty 200-OK from the Telegram file endpoint would produce an empty transcript and skip the echo).
+
+The new design registers as a single voice transcription provider via `registerTelegramVoiceTranscriptionProvider`. The bridge downloads the file (its reliable download path), calls our provider with the file path, and includes the returned transcript in the user message. We transcribe once, send the `🎙️` echo from the same code path, and return the transcript. The update handler is reduced to a minimal stasher for the chat ID (which the provider hook doesn't receive).
+
+**Net code change**: `echo.ts` went from 426 lines to 256 lines. The bridge does the file download. The provider does the transcription. The update handler stashes one value. No double transcription, no silent download failure.
+
+**Verified by code review**: the bridge's `transcribeTelegramVoiceFileWithProviders` calls our provider during `processTelegramInboundHandlers` (BEFORE the message is sent to the LLM), so the echo happens before the LLM reply. The user sees the `🎙️` confirmation first, then the agent's voice reply.
+
 ### v0.16.6 — self-sufficient inbound echo handler (real fix for missing transcript)
 
 The voice-echo pipeline was structured as a two-stage flow: the `update` handler (`handleTelegramUpdateForEcho`) downloaded the file, transcribed it, and populated a cache; the `inbound` handler (`handleTelegramInboundForEcho`) then looked up that cache to get the transcript for the agent's user message. In practice this was fragile:

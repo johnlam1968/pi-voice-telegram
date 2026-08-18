@@ -2,6 +2,22 @@
  * pi-voice-telegram — companion extension for the Pi coding agent + a
  * Telegram bridge (default: @llblab/pi-telegram).
  *
+ * v0.16.7 REDESIGN of the inbound voice path: the previous design had
+ * two handlers (an update handler that downloaded + transcribed +
+ * cached, and an inbound handler that did its own on-demand transcribe
+ * on cache miss), which meant the same audio was sometimes transcribed
+ * twice, and the update handler's separate download path could fail
+ * silently (no byte-count verification — an empty 200-OK response from
+ * the Telegram file endpoint would produce an empty transcript and
+ * skip the echo). The new design registers as a single voice
+ * transcription provider (`registerTelegramVoiceTranscriptionProvider`)
+ * so the bridge downloads the file once and calls us with its
+ * already-downloaded path. We transcribe once, send the `🎙️` echo
+ * from the same code path, and return the transcript. The update
+ * handler is reduced to a minimal stasher for the chat ID (which the
+ * provider hook doesn't receive). One transcription, blocking UX
+ * (echo before LLM processing), no double work, no silent failure.
+ *
  * Three responsibilities, all driven by the bridge's telegram.json plus
  * the companion's own settings file (`~/.pi/agent/pi-voice-telegram.json`):
  *
@@ -145,9 +161,9 @@
  *
  * Public APIs used (all stable per pi-telegram public-api.md):
  *   - @llblab/pi-telegram/voice     → registerTelegramVoiceSynthesisProvider,
+ *                                    registerTelegramVoiceTranscriptionProvider,
  *                                    getTelegramVoiceSendTranscript
  *   - @llblab/pi-telegram/updates   → registerTelegramUpdateHandler
- *   - @llblab/pi-telegram/inbound   → registerTelegramInboundHandler
  *   - @llblab/pi-telegram/delivery  → sendTelegramView
  *   - @llblab/pi-telegram/outbound  → recordTelegramRuntimeEvent
  *   - @earendil-works/pi-coding-agent → getAgentDir, ExtensionAPI
@@ -168,13 +184,13 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
 import { registerTelegramVoiceSynthesisProvider } from "@llblab/pi-telegram/voice";
 import { registerTelegramUpdateHandler } from "@llblab/pi-telegram/updates";
-import { registerTelegramInboundHandler } from "@llblab/pi-telegram/inbound";
+import { registerTelegramVoiceTranscriptionProvider } from "@llblab/pi-telegram/voice";
 
 import { createMmTtsSynthesisProvider } from "./synthesis-provider.js";
 import {
-	clearTranscriptCache,
-	handleTelegramInboundForEcho,
+	clearSttState,
 	handleTelegramUpdateForEcho,
+	handleTelegramVoiceTranscription,
 	setSttDefaults,
 } from "./echo.js";
 import {
@@ -231,7 +247,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		// effect on the very next message, with a fresh cache).
 		disposers.forEach((d: () => void) => d());
 		disposers = [];
-		clearTranscriptCache();
+		clearSttState();
 
 		const cfg = loadCompanionConfig();
 
@@ -253,16 +269,24 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 
 		// (2) Inbound echo — default on, opt-out via
 		// `inbound.echoEnabled: false`.
+		//
+		// v0.16.7: redesigned to use the bridge's voice-transcription
+		// provider hook. The bridge downloads the file (reliable path),
+		// calls our provider during `processTelegramInboundHandlers`,
+		// and includes the returned transcript in the user message.
+		// We transcribe the bridge's file (one transcription, no
+		// duplicate work) and send the `🎙️` echo to the user from
+		// the same code path. The update handler is minimal — it
+		// stashes the chat ID (which the provider doesn't get) keyed
+		// by file name, so the provider can route the echo.
 		if (cfg.inbound?.echoEnabled !== false) {
-			// v0.16.2: push the JSON's resolved STT defaults (JSON >
-			// env > hardcoded) into the echo module before the handlers
-			// fire. The handlers read the module-level `currentSttDefaults`
-			// on each call, so this hot-reload flows through
-			// automatically with the existing fs.watch.
 			setSttDefaults(sttDefaults);
 			disposers.push(registerTelegramUpdateHandler(handleTelegramUpdateForEcho));
-			disposers.push(registerTelegramInboundHandler("voice", handleTelegramInboundForEcho));
-			disposers.push(registerTelegramInboundHandler("audio", handleTelegramInboundForEcho));
+			disposers.push(
+				registerTelegramVoiceTranscriptionProvider(handleTelegramVoiceTranscription, {
+					id: "pi-voice-telegram/stt",
+				}),
+			);
 		}
 
 		// (3) LLM tool surface — opt-in via `tools.enabled: true`.
@@ -361,6 +385,6 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			configWatcher.close();
 			configWatcher = null;
 		}
-		clearTranscriptCache();
+		clearSttState();
 	});
 }
