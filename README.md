@@ -407,6 +407,26 @@ npm test
 
 ## Changelog
 
+### v0.16.6 — self-sufficient inbound echo handler (real fix for missing transcript)
+
+The voice-echo pipeline was structured as a two-stage flow: the `update` handler (`handleTelegramUpdateForEcho`) downloaded the file, transcribed it, and populated a cache; the `inbound` handler (`handleTelegramInboundForEcho`) then looked up that cache to get the transcript for the agent's user message. In practice this was fragile:
+
+- The bridge's update dispatch can drop updates (lifecycle, journal, admission flow).
+- The bridge's `bindTelegramRuntimeEventRecorder` is defined but **never called** anywhere in `@llblab/pi-telegram`, so `recordTelegramRuntimeEvent` is a no-op. Any error in the update handler is silent — there's no observable signal that the cache is empty because of a failed download, transcribe error, or bot-token issue.
+- The `setSttDefaults` + `clearTranscriptCache` calls only fired on `reconfigure()` (hot-reload of `pi-voice-telegram.json`), so a hot-reload during a voice burst would wipe the cache mid-flight.
+
+The result: the agent sometimes received a voice message with **no transcript in the user text** — just the file path, the `[voice] delivery: automatic voice` marker, and no `[outputs]` section. The agent's own thinking in v0.16.5 sessions explicitly noted *"the user message I received only contains '[voice] delivery: automatic voice' without the transcription text visible. Let me transcribe it to understand what the user is asking."* and then called the `transcribe_audio` LLM tool as an unintentional fallback.
+
+v0.16.6 makes the inbound handler self-sufficient: it tries the cache first (fast path, populated by the update handler when that path is available), and falls through to **on-demand transcription of the bridge's already-downloaded file** using the `file.path` the bridge already gives us. The agent always sees the transcript, regardless of whether the update handler ran, failed, or was never dispatched.
+
+The update handler is kept as a pre-warm optimization (when it does run, the cache hit is faster than the on-demand path). But the inbound handler no longer depends on it.
+
+**File-based trace logging** is also added (under `/home/pi/.pi/agent/tmp/pi-voice-telegram-debug.log`) because the bridge's runtime event recorder is unbound and `recordTelegramRuntimeEvent` is silently a no-op. The trace captures:
+- Update handler invocation (with the update shape)
+- Inbound handler invocation (cache hit / on-demand / miss)
+- Cache writes (with key + length + preview)
+- Errors (with message)
+
 ### v0.16.5 — use Node's built-in `FormData` for the STT body
 
 The v0.16.3 root-cause fix (drop the trailing `\r\n` on each multipart value) is correct but fragile — `buildMultipart()` is ~40 lines of hand-rolled byte-buffer code that has to get the boundary placement exactly right to match cpp-httplib's parser. Anyone editing that function later could re-introduce the same trap.

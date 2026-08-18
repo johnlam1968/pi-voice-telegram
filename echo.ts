@@ -34,6 +34,7 @@
  *   - @earendil-works/pi-coding-agent → getAgentDir
  */
 
+import { appendFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +45,16 @@ import { sendTelegramView } from "@llblab/pi-telegram/delivery";
 import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { transcribe as runStt } from "./whisper-stt.js";
+
+// DEBUG: trace logging (remove after root cause found)
+const DEBUG_LOG = "/home/pi/.pi/agent/tmp/pi-voice-telegram-debug.log";
+function dlog(msg: string): void {
+	try {
+		appendFileSync(DEBUG_LOG, `[${new Date().toISOString()}] ${msg}\n`);
+	} catch {
+		/* ignore */
+	}
+}
 
 // --- Configuration (v0.16.2: JSON-driven, not env var) ---
 
@@ -205,6 +216,10 @@ async function transcribeAndEcho(
   message: TelegramUpdateVoiceMessage,
 ): Promise<void> {
   const attachment = message.voice ?? message.audio;
+  dlog(
+    `transcribeAndEcho: messageId=${message.message_id} ` +
+      `fileId=${attachment?.file_id?.slice(0, 16)} size=${attachment?.file_size}`,
+  );
   if (!attachment) return;
 
   if (attachment.file_size !== undefined && attachment.file_size > TELEGRAM_FILE_LIMIT_BYTES) {
@@ -255,6 +270,10 @@ async function transcribeAndEcho(
 
       // Cache BEFORE echoing so a slow echo can't race the inbound handler.
       transcriptCache.set(cacheKey, transcript);
+      dlog(
+        `update-handler cached transcript for cacheKey=${cacheKey} ` +
+          `len=${transcript.length} preview=${JSON.stringify(transcript.slice(0, 40))}`,
+      );
 
       const target: { chatId: number; threadId?: number } = { chatId: message.chat.id };
       if (typeof message.message_thread_id === "number") {
@@ -277,6 +296,9 @@ async function transcribeAndEcho(
       await rm(tmp, { recursive: true, force: true }).catch(() => undefined);
     }
   } catch (error) {
+    dlog(
+      `transcribeAndEcho ERROR messageId=${message.message_id}: ${(error as Error).message}`,
+    );
     recordTelegramRuntimeEvent("pi-voice-telegram/echo", error, {
       phase: "transcribe",
       chatId: message.chat.id,
@@ -289,11 +311,17 @@ async function transcribeAndEcho(
 
 // --- Update + inbound handlers ---
 
+// DEBUG: trace logging (remove after root cause found)
 export async function handleTelegramUpdateForEcho(
   update: unknown,
 ): Promise<"pass"> {
   const u = update as TelegramUpdate;
   const msg = u.message ?? u.edited_message;
+  dlog(
+    `handleTelegramUpdateForEcho invoked: hasMessage=${Boolean(msg)} ` +
+      `hasVoice=${Boolean(msg?.voice)} hasAudio=${Boolean(msg?.audio)} ` +
+      `isBot=${Boolean(msg?.from?.is_bot)}`,
+  );
   if (!msg) return "pass";
   if (!msg.voice && !msg.audio) return "pass";
   if (msg.from?.is_bot) return "pass";
@@ -311,12 +339,72 @@ export async function handleTelegramUpdateForEcho(
   return "pass";
 }
 
-export function handleTelegramInboundForEcho(input: {
+/**
+ * v0.16.6: SELF-SUFFICIENT inbound handler.
+ *
+ * Previously this was a pure cache lookup — the update handler
+ * (`handleTelegramUpdateForEcho`) was responsible for downloading
+ * the file, transcribing it, and populating the cache before this
+ * handler ran. In practice that pipeline was fragile: the bridge's
+ * update dispatch can drop updates (lifecycle, journal, admission
+ * flow), and any failure in the update handler's transcribe path
+ * would silently leave the cache empty (the bridge's
+ * `bindTelegramRuntimeEventRecorder` is defined but never called, so
+ * `recordTelegramRuntimeEvent` is a no-op and errors are silent).
+ *
+ * The new design: this handler is the source of truth for producing
+ * the transcript that ends up in the agent's user message. It tries
+ * the cache first (fast path, populated by the update handler when
+ * that path is available), and falls through to an on-demand
+ * transcription using the file the bridge already downloaded
+ * (`input.file.path`). The on-demand path is the actual fix — it
+ * means the agent always sees the transcript, regardless of whether
+ * the update handler ran, failed, or was never dispatched.
+ */
+export async function handleTelegramInboundForEcho(input: {
   kind: string;
   file?: { fileName?: string; path?: string };
 }): Promise<string | undefined> {
-  if (!input.file) return Promise.resolve(undefined);
-  const fileName = input.file.fileName;
-  if (!fileName) return Promise.resolve(undefined);
-  return Promise.resolve(transcriptCache.get(fileName));
+  const fileName = input.file?.fileName;
+  const filePath = input.file?.path;
+
+  // Fast path: cache hit (the update handler pre-warmed this).
+  if (fileName) {
+    const cached = transcriptCache.get(fileName);
+    if (cached) {
+      dlog(`inbound: cache hit for ${fileName} (len=${cached.length})`);
+      return cached;
+    }
+  }
+
+  if (!filePath) {
+    dlog("inbound: no cache, no filePath — returning undefined");
+    return undefined;
+  }
+
+  // Slow path: transcribe the bridge's already-downloaded file on demand.
+  // This is the actual fix for the missing-transcript bug.
+  try {
+    dlog(`inbound: cache miss for ${fileName ?? filePath}, transcribing on demand from ${filePath}`);
+    const stt = currentSttDefaults;
+    const transcript = (
+      await runStt({
+        inputPath: filePath,
+        lang: stt.lang,
+        baseUrl: stt.baseUrl,
+        timeoutMs: stt.timeoutMs,
+      })
+    ).trim();
+    if (transcript && fileName) {
+      transcriptCache.set(fileName, transcript);
+    }
+    dlog(
+      `inbound: on-demand transcribe done len=${transcript.length} ` +
+        `preview=${JSON.stringify(transcript.slice(0, 40))}`,
+    );
+    return transcript || undefined;
+  } catch (error) {
+    dlog(`inbound: on-demand transcribe ERROR: ${(error as Error).message}`);
+    return undefined;
+  }
 }
