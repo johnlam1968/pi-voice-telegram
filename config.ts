@@ -161,7 +161,7 @@ const TTS_FALLBACKS = {
 	lang: "Chinese,Yue",
 	model: "speech-2.8-hd",
 	timeoutMs: 30_000,
-	verifyAfterSynthesize: true,
+	verifyAfterSynthesize: false,
 } as const;
 
 /** Hardcoded STT fallbacks. */
@@ -231,7 +231,7 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  */
 const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-	_hint: "pi-voice-telegram companion settings (v0.16.0+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.0: tts.verifyAfterSynthesize (default true) runs whisper-stt language detection on every synthesis and logs the result under `category: \"pi-voice-telegram/tts-verify\"`.",
+	_hint: "pi-voice-telegram companion settings (v0.16.8+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.8: tts.verifyAfterSynthesize default is false (was true in v0.16.0–v0.16.7); set to true to opt into a whisper-stt language-detection self-check on every synthesis that logs under `category: \"pi-voice-telegram/tts-verify\"`.",
 	inbound: { echoEnabled: true },
 	tools: {
 		enabled: false,
