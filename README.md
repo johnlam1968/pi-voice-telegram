@@ -405,6 +405,33 @@ npx tsc --noEmit
 npm test
 ```
 
+## Changelog
+
+### v0.16.3 — `,` echo bug fix (root cause)
+
+**The bug:** incoming voice messages were sometimes transcribed as a single `,` (or other 1-char punctuation), causing the agent to receive a useless transcript. The v0.16.2 fallback retry (omit the language hint, hope whisper auto-detects) masked the symptom but never addressed the cause.
+
+**Root cause:** `whisper-stt.ts`'s `buildMultipart()` produced a body with **two** `\r\n` bytes between each value and the next boundary — one trailing the value (`${CRLF}`), one leading the next part's boundary (`${CRLF}--${boundary}`). cpp-httplib's multipart parser (used by whisper.cpp's `whisper-server`) searches for `\r\n--<boundary>` and treats everything before that as the value. With the double `\r\n`, the parser stopped at the FIRST one, so each value included the trailing CRLF: `language` became `"yue\r\n"`, `response_format` became `"text\r\n"`. whisper.cpp rejected the malformed language code, fell back to a degenerate decode, and returned `,`. The same root cause silently broke `detectLanguage()` (the v0.16.0 TTS self-check) — `response_format="verbose_json\r\n"` matched no known format, so whisper fell back to the default JSON output and the self-check always failed.
+
+**The fix:** drop the trailing `\r\n` from each value. Each subsequent part still starts with `\r\n--<boundary>`, so the body ends up with exactly one `\r\n` between value and next boundary, matching what `python-requests` and `curl` produce. The file content (raw OGG bytes) is correctly extracted because the next part's leading `\r\n` provides the boundary's leading CRLF.
+
+**Verified via byte-level relay probes:**
+- v0.16.2 body on `voice-4503.ogg` (Cantonese): `,` (bug)
+- v0.16.3 body on the same OGG: `我想睇下而家又點啦` (correct)
+- `curl` on the same OGG: `我想睇下而家又點啦` (correct)
+- `detectLanguage()` now returns proper `verbose_json` with `detected_language`, confidence, and per-language probabilities
+
+The v0.16.2 fallback retry is kept as a safety net for genuine edge cases (very short audio, no-speech segments), but with v0.16.3 it should rarely trigger.
+
+### v0.16.2 — JSON-driven STT defaults + degenerate-output fallback
+
+- `whisper-stt.ts` reads `stt.lang`, `stt.baseUrl`, `stt.timeoutMs` from the JSON config (the v0.8.0+ JSON > env > hardcoded design). Wired through a new `setSttDefaults()` export called by `index.ts`'s `reconfigure()` so the JSON is the source of truth on hot-reload.
+- Added a one-shot fallback retry in `echo.ts` when the primary STT result is empty, <2 chars, or matches a punctuation-only regex — retries without the language hint, hoping whisper's auto-detect produces verbatim text.
+
+### v0.16.1 — `config_reset` prompt fix
+
+- Overhauled `CONFIG_RESET_PROMPT` so the operator's "reset config" intent maps directly to `pi_voice_telegram_config_reset` without asking for clarification. Fixed a stale "restart required" line in the tool description.
+
 ## License
 
 MIT.

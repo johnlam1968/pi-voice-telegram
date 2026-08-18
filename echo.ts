@@ -257,6 +257,15 @@ async function transcribeAndEcho(
       // (visibility into the model's failure mode) but the retry's
       // output is what the user sees. Single retry, no loop, to
       // bound the cost of a bad model state.
+      //
+      // v0.16.3: the root cause of the original "," echo (a double
+      // \r\n in the multipart body that corrupted the `language` form
+      // field to `"yue\r\n"`) is fixed in `whisper-stt.ts`. This
+      // fallback is now a safety net for genuine edge cases — very
+      // short audio, no-speech segments, low-confidence decodes that
+      // collapse to punctuation. With v0.16.3 it should rarely
+      // trigger; the log line below surfaces any residual cases so we
+      // can address them.
       if (
         !transcript ||
         transcript.length < 2 ||

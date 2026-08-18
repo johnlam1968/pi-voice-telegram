@@ -307,6 +307,37 @@ function buildMultipart(
 	lang: string | null,
 	responseFormat: string,
 ): Buffer {
+	// v0.16.3: fix `,` echo bug.
+	//
+	// Root cause: cpp-httplib's multipart parser (used by whisper.cpp's
+	// whisper-server) searches for `\r\n--<boundary>` and treats everything
+	// BEFORE that as the field value. Our v0.16.2 body had BOTH a trailing
+	// `\r\n` on each value AND a leading `\r\n` on the next part, producing
+	// TWO CRLFs between value and next boundary. The parser would find the
+	// FIRST `\r\n` (the value's trailing one), so the value included the
+	// trailing CRLF: `language` became `"yue\r\n"` instead of `"yue"`.
+	// whisper.cpp rejected the malformed language code, fell back to a
+	// degenerate decode, and returned `,`. The same bug applied to
+	// `response_format` (became `"text\r\n"`), which fortunately matched
+	// no known format and silently fell back to the server's default JSON
+	// output — masking the bug for `text` mode.
+	//
+	// Fix: drop the trailing `\r\n` from each value. Each part (except the
+	// first) still starts with `\r\n--<boundary>`, so the sequence between
+	// value and next boundary becomes a single `\r\n` (provided by the next
+	// part's leading CRLF). Result: the parser extracts just the raw value
+	// bytes, matching what python-requests and curl produce.
+	//
+	// Verified via byte-level relay probes:
+	//   - buggy body (v0.16.2): HTTP 200, body `,`
+	//   - fixed body (v0.16.3): HTTP 200, body `我想睇下而家又點啦` (correct)
+	//   - same OGG, curl:       HTTP 200, body `我想睇下而家又點啦`
+	//
+	// The file content (raw bytes between file-part headers and the next
+	// boundary) is correctly extracted because the next part's leading
+	// `\r\n` provides the boundary delimiter. The closing boundary is
+	// also preceded by a `\r\n` so the last value's terminator and the
+	// closing's leading CRLF are the same byte sequence.
 	const CRLF = "\r\n";
 	const parts: Buffer[] = [
 		Buffer.from(
@@ -316,15 +347,18 @@ function buildMultipart(
 		),
 		fileBytes,
 	];
-	// Only include the `language` field if a hint was provided. Omitting
-	// it triggers whisper-server's language-detection path, which is what
-	// `detectLanguage` relies on.
+	// Each subsequent part starts with `\r\n--<boundary>`. The leading
+	// `\r\n` is the previous part's terminator (file bytes terminator for
+	// the language part, language value terminator for the response_format
+	// part, response_format value terminator for the closing). The value
+	// itself has NO trailing `\r\n` — that's the parser's job to consume
+	// when it finds the next `\r\n--<boundary>`.
 	if (lang !== null) {
 		parts.push(
 			Buffer.from(
 				`${CRLF}--${boundary}${CRLF}` +
 					`Content-Disposition: form-data; name="language"${CRLF}${CRLF}` +
-					`${lang}${CRLF}`,
+					`${lang}`,
 			),
 		);
 	}
