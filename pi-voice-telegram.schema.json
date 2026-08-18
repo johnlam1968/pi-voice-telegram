@@ -23,15 +23,15 @@
 				}
 			}
 		},
-		"tools": {
+		"llm_tools": {
 			"type": "object",
-			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's `synthesize_voice` + `transcribe_audio` are gated on these flags.",
+			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's `synthesize_voice` + `transcribe_audio` are gated on these flags. The `llm_tools.` namespace makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features (which run unconditionally; only their LLM-tool wrappers are gated here).",
 			"additionalProperties": false,
 			"properties": {
 				"exposed": {
 					"type": "boolean",
 					"default": false,
-					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false. v0.16.9: renamed from `tools.enabled` to `tools.exposed` — the nested `tools.tts.enabled` and `tools.stt.enabled` are unchanged. BREAKING: configs with the old `tools.enabled` key will be treated as if the master switch is off (no tools registered); rename to `tools.exposed` to migrate.",
+					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false. v0.16.10: namespace renamed from `tools` to `llm_tools` (the `llm_tools.` prefix makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features). Internal field names (`exposed`, `tts.enabled`, `tts.name`, `stt.enabled`, `stt.name`) are unchanged. v0.16.9 had `tools.exposed`; v0.16.10 has `llm_tools.exposed`. BREAKING: any v0.16.9 config with `tools.*` will be treated as if the master switch is off (no LLM tools registered); rename `tools` to `llm_tools` in your config to migrate.",
 					"examples": [true, false]
 				},
 				"tts": {
@@ -42,7 +42,7 @@
 						"enabled": {
 							"type": "boolean",
 							"default": true,
-							"description": "Register the TTS tool. Honored only when `tools.exposed` is true. Default true.",
+							"description": "Register the TTS tool. Honored only when `llm_tools.exposed` is true. Default true.",
 							"examples": [true, false]
 						},
 						"name": {
@@ -61,13 +61,13 @@
 						"enabled": {
 							"type": "boolean",
 							"default": true,
-							"description": "Register the STT tool. Honored only when `tools.exposed` is true. Default true.",
+							"description": "Register the STT tool. Honored only when `llm_tools.exposed` is true. Default true.",
 							"examples": [true, false]
 						},
 						"name": {
 							"type": "string",
 							"default": "transcribe_audio",
-							"description": "Override the tool name. Same templating behavior as `tools.tts.name`.",
+							"description": "Override the tool name. Same templating behavior as `llm_tools.tts.name`.",
 							"examples": ["transcribe_audio", "transcribe_yue", "stt_cantonese"]
 						}
 					}

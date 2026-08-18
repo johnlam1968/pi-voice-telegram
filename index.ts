@@ -40,7 +40,7 @@
  *      on by default; turn it off via `inbound.echoEnabled: false` in
  *      `~/.pi/agent/pi-voice-telegram.json`.
  *
- *   3. LLM tool surface (opt-in) — when `tools.exposed: true` in the
+ *   3. LLM tool surface (opt-in) — when `llm_tools.exposed: true` in the
  *      companion settings file, register two additional tools the
  *      agent can call explicitly:
  *        - `synthesize_voice` (wraps `voice-reply.ts` + `mm-tts.ts`)
@@ -52,8 +52,8 @@
  *        - `transcribe_audio` (wraps `whisper-stt.transcribe()`)
  *          Transcribes a local audio file via `whisper-server` and
  *          returns the transcript text.
- *      The two tools are independent — `tools.tts.enabled` and
- *      `tools.stt.enabled` can be flipped separately.
+ *      The two tools are independent — `llm_tools.tts.enabled` and
+ *      `llm_tools.stt.enabled` can be flipped separately.
  *
  * The extension does not impose any UX policy of its own. Whatever the
  * operator sets in `telegram.json` (or via the bridge's settings UI) is
@@ -81,7 +81,7 @@
  *         synthesis provider is re-created (so new TTS defaults
  *         apply on the next bridge event), the echo handlers are
  *         re-registered per the new `inbound.echoEnabled`, and the
- *         six LLM tools are re-registered per the new `tools.*`
+ *         six LLM tools are re-registered per the new `llm_tools.*`
  *         flags. Hot-reload is best-effort: if `fs.watch` fails
  *         (sandboxed env, no inotify handles, etc.) the
  *         extension logs a warning and falls back to the
@@ -113,7 +113,7 @@
  *         to the bundled defaults after backing up the previous
  *         state to a timestamped `.bak.<unix-ms>` file. The
  *         config-read and config-write tools are now registered
- *         whenever `tools.exposed` is true (no double opt-in).
+ *         whenever `llm_tools.exposed` is true (no double opt-in).
  *         Security model: the container's filesystem permissions
  *         are the real boundary, not a JSON flag.
  * v0.11.0: added two more LLM tools, `pi_voice_telegram_config_read`
@@ -145,7 +145,7 @@
  *         as fallbacks, so the cluster's `docker-compose.yaml` doesn't
  *         need to change. The tool prompt text (description / snippet /
  *         guidelines) is now templated against the resolved tool name,
- *         so renames via `tools.tts.name` / `tools.stt.name` produce
+ *         so renames via `llm_tools.tts.name` / `llm_tools.stt.name` produce
  *         consistent LLM-facing strings.
  * v0.7.0: auto-seed a default `~/.pi/agent/pi-voice-telegram.json` on
  *         first run (when missing). The seeded default matches v0.5.0
@@ -155,7 +155,7 @@
  *         surface; v0.7.0 makes the settings file discoverable by
  *         operators who upgrade.
  * v0.6.0: added the LLM tool surface (`synthesize_voice`,
- *         `transcribe_audio`) gated on `tools.exposed` in the companion
+ *         `transcribe_audio`) gated on `llm_tools.exposed` in the companion
  *         settings file. The bridge-driven TTS and inbound echo paths
  *         are unchanged from v0.5.0.
  *
@@ -231,7 +231,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 	 * What hot-reload re-registers (v0.14.0):
 	 *   - Synthesis provider (always on; uses the latest TTS defaults)
 	 *   - Echo handlers (gated on `inbound.echoEnabled`)
-	 *   - All seven LLM tools (gated on `tools.exposed` + sub-flags)
+	 *   - All seven LLM tools (gated on `llm_tools.exposed` + sub-flags)
 	 *   - The disposal-then-re-register pattern means previous
 	 *     registrations are removed before new ones go in.
 	 *
@@ -289,24 +289,27 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			);
 		}
 
-		// (3) LLM tool surface — opt-in via `tools.exposed: true`.
-		//     (v0.16.9: renamed from tools.enabled → tools.exposed; the
-		//     nested tools.tts.enabled and tools.stt.enabled are
-		//     unchanged.)
-		if (cfg.tools?.exposed === true) {
-			if (cfg.tools.tts?.enabled !== false) {
+		// (3) LLM tool surface — opt-in via `llm_tools.exposed: true`.
+		//     (v0.16.10: namespace renamed from `tools` to `llm_tools`;
+		//     internal field names unchanged. v0.16.9 had `tools.exposed`;
+		//     v0.16.10 has `llm_tools.exposed`. The `llm_tools.` prefix
+		//     makes it explicit that these switches gate the LLM tool
+		//     surface, not the TTS/STT extension features — those run
+		//     unconditionally; only their LLM-tool wrappers are gated.)
+		if (cfg.llm_tools?.exposed === true) {
+			if (cfg.llm_tools.tts?.enabled !== false) {
 				registerSynthesizeVoiceTool({
 					pi,
 					agentDir,
-					nameOverride: cfg.tools.tts?.name,
+					nameOverride: cfg.llm_tools.tts?.name,
 					tts: ttsDefaults,
 				});
 			}
-			if (cfg.tools.stt?.enabled !== false) {
+			if (cfg.llm_tools.stt?.enabled !== false) {
 				registerTranscribeAudioTool({
 					pi,
 					agentDir,
-					nameOverride: cfg.tools.stt?.name,
+					nameOverride: cfg.llm_tools.stt?.name,
 					stt: sttDefaults,
 				});
 			}

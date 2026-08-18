@@ -66,7 +66,7 @@ export interface CompanionConfig {
 		echoEnabled?: boolean;
 	};
 	/** LLM tool surface. Default: not exposed (opt-in). */
-	tools?: {
+	llm_tools?: {
 		/**
 		 * Master switch for LLM tool registration. When false, NONE of
 		 * the LLM-callable tools (synthesize_voice, transcribe_audio,
@@ -77,7 +77,7 @@ export interface CompanionConfig {
 		 * Note: this is an OPERATOR PREFERENCE (token-cost + ergonomic),
 		 * not a security boundary. A sufficiently capable LLM with
 		 * `bash` + `write` can modify this file regardless of how
-		 * `tools.exposed` is set. The real security boundary is the
+		 * `llm_tools.exposed` is set. The real security boundary is the
 		 * container's filesystem permissions, the bridge's role-based
 		 * access, etc. The settings file is just JSON; the LLM is
 		 * fully capable of editing it via the host's write tool.
@@ -86,21 +86,26 @@ export interface CompanionConfig {
 		 * surface (TTS, STT, schema discovery, config introspection,
 		 * config modification, config reset).
 		 *
-		 * v0.16.9: renamed from `tools.enabled` to `tools.exposed`. The
-		 * nested `tools.tts.enabled` and `tools.stt.enabled` are
-		 * unchanged. BREAKING: any `pi-voice-telegram.json` with the
-		 * old `tools.enabled` key will be treated as if the master
-		 * switch is off (no LLM tools registered). Migration: rename
-		 * `tools.enabled` to `tools.exposed` in your config file.
+		 * v0.16.10: namespace renamed from `tools` to `llm_tools` for
+		 * clarity — the `llm_tools.` prefix makes it explicit that
+		 * these switches gate the LLM tool surface (the registration
+		 * of the 7 LLM-callable tools), not the TTS/STT extension
+		 * features (which are always on; only their LLM-tool wrappers
+		 * are gated). The internal field names (`exposed`, `tts.enabled`,
+		 * `tts.name`, `stt.enabled`, `stt.name`) are unchanged.
+		 * v0.16.9 had `tools.exposed`; v0.16.10 has `llm_tools.exposed`.
+		 * BREAKING: any v0.16.9 config with `tools.*` will be treated
+		 * as if the master switch is off (no LLM tools registered);
+		 * rename `tools` to `llm_tools` in your config to migrate.
 		 */
 		exposed?: boolean;
-		/** TTS tool: synthesize_voice. Default: enabled when `tools.exposed` is true. */
+		/** TTS tool: synthesize_voice. Default: enabled when `llm_tools.exposed` is true. */
 		tts?: {
 			enabled?: boolean;
 			/** Override the tool name. Default: `synthesize_voice`. */
 			name?: string;
 		};
-		/** STT tool: transcribe_audio. Default: enabled when `tools.exposed` is true. */
+		/** STT tool: transcribe_audio. Default: enabled when `llm_tools.exposed` is true. */
 		stt?: {
 			enabled?: boolean;
 			/** Override the tool name. Default: `transcribe_audio`. */
@@ -240,7 +245,7 @@ const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
 	_hint: "pi-voice-telegram companion settings (v0.16.8+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.8: tts.verifyAfterSynthesize default is false (was true in v0.16.0–v0.16.7); set to true to opt into a whisper-stt language-detection self-check on every synthesis that logs under `category: \"pi-voice-telegram/tts-verify\"`.",
 	inbound: { echoEnabled: true },
-	tools: {
+	llm_tools: {
 		exposed: false,
 		tts: { enabled: true, name: "synthesize_voice" },
 		stt: { enabled: true, name: "transcribe_audio" },
