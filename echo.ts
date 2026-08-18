@@ -239,57 +239,18 @@ async function transcribeAndEcho(
       // JSON's stt.lang / stt.baseUrl / stt.timeoutMs as
       // informational-only. JSON is the source of truth.
       const stt = currentSttDefaults;
-      const primary = (await runStt({
+      // v0.16.3: root cause of the "," echo bug is fixed in whisper-stt.ts
+      // (double-CRLF in the multipart body that corrupted the `language`
+      // form field to "yue\r\n"). The primary result is now reliable; no
+      // fallback retry is needed. Empty results still pass through (e.g.
+      // very short audio, genuine silence) — the cache check downstream
+      // will skip the echo and the agent will simply receive no transcript.
+      const transcript = (await runStt({
         inputPath,
         lang: stt.lang,
         baseUrl: stt.baseUrl,
         timeoutMs: stt.timeoutMs,
       })).trim();
-      let transcript = primary;
-      // v0.16.2: defensive fallback. whisper on Cantonese audio with
-      // a forced lang="yue" hint occasionally returns degenerate
-      // outputs (single punctuation like "," or single-character
-      // garbage). The fix: if the result is empty OR a single char OR
-      // pure punctuation/whitespace, retry once with no lang hint —
-      // whisper-server will auto-detect the language, which my
-      // 2026-08-17 probes confirmed produces the verbatim Cantonese
-      // consistently. The original result is logged for debugging
-      // (visibility into the model's failure mode) but the retry's
-      // output is what the user sees. Single retry, no loop, to
-      // bound the cost of a bad model state.
-      //
-      // v0.16.3: the root cause of the original "," echo (a double
-      // \r\n in the multipart body that corrupted the `language` form
-      // field to `"yue\r\n"`) is fixed in `whisper-stt.ts`. This
-      // fallback is now a safety net for genuine edge cases — very
-      // short audio, no-speech segments, low-confidence decodes that
-      // collapse to punctuation. With v0.16.3 it should rarely
-      // trigger; the log line below surfaces any residual cases so we
-      // can address them.
-      if (
-        !transcript ||
-        transcript.length < 2 ||
-        /^[\s,.!?;:\-'"`~(){}\[\]\\/|]+$/.test(transcript)
-      ) {
-        recordTelegramRuntimeEvent(
-          "pi-voice-telegram/echo",
-          new Error(`stt primary result looked degenerate: ${JSON.stringify(primary)}`),
-          {
-            phase: "stt-fallback",
-            requestedLang: stt.lang,
-            primaryLength: primary.length,
-            chatId: message.chat.id,
-            messageId: message.message_id,
-          },
-        );
-        const retry = (await runStt({
-          inputPath,
-          // No lang → whisper auto-detects.
-          baseUrl: stt.baseUrl,
-          timeoutMs: stt.timeoutMs,
-        })).trim();
-        if (retry) transcript = retry;
-      }
       if (!transcript) return;
 
       // Cache BEFORE echoing so a slow echo can't race the inbound handler.

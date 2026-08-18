@@ -407,6 +407,10 @@ npm test
 
 ## Changelog
 
+### v0.16.4 — remove the v0.16.2 fallback retry
+
+Once the root cause of the `,` echo bug was identified and fixed in v0.16.3 (double `\r\n` in the multipart body), the v0.16.2 fallback retry in `echo.ts` became dead code. The primary STT result is now reliable; if it returns empty (very short audio, genuine silence, no-speech segments), the inbound handler skips the echo and the agent simply receives no transcript. No retry, no band-aid, no extra round-trip to whisper-server.
+
 ### v0.16.3 — `,` echo bug fix (root cause)
 
 **The bug:** incoming voice messages were sometimes transcribed as a single `,` (or other 1-char punctuation), causing the agent to receive a useless transcript. The v0.16.2 fallback retry (omit the language hint, hope whisper auto-detects) masked the symptom but never addressed the cause.
@@ -421,7 +425,7 @@ npm test
 - `curl` on the same OGG: `我想睇下而家又點啦` (correct)
 - `detectLanguage()` now returns proper `verbose_json` with `detected_language`, confidence, and per-language probabilities
 
-The v0.16.2 fallback retry is kept as a safety net for genuine edge cases (very short audio, no-speech segments), but with v0.16.3 it should rarely trigger.
+The v0.16.2 fallback retry was removed in v0.16.4 — with the root cause fixed, the retry was dead code.
 
 ### v0.16.2 — JSON-driven STT defaults + degenerate-output fallback
 
