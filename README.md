@@ -270,9 +270,7 @@ The seed is **idempotent and safe**:
 - If the write fails (read-only FS, permission denied), the extension's in-memory defaults still apply — no behavior change.
 - A malformed JSON file is kept intact, not silently overwritten. The extension's defaults apply; the operator sees the same content they had before.
 
-To enable tools after the seed, edit the file (flip `llm_tools.exposed` to `true`) and restart the session. See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a copy-paste-ready file with tools enabled.
-
-The auto-seeded file includes the same fields as `examples/pi-voice-telegram.json` (modulo the `llm_tools.exposed` value). The two should be byte-equal; a sync-drift bug is recorded in PLAN.md as a v0.8.0 maintenance lesson.
+To enable tools after the seed, edit the file (flip `llm_tools.exposed` to `true`) and restart the session. The auto-seed produces a complete config on first start (with all fields populated) and hot-reloads on every edit — no need to copy a separate example file.
 
 ```json
 {
