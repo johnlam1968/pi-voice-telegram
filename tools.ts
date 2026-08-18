@@ -482,7 +482,7 @@ export function registerConfigWriteTool(pi: ExtensionAPI): void {
 	});
 }
 
-// --- pi_voice_telegram_config_reset (v0.12.0, schema-driven in v0.12.1) ---
+// --- pi_voice_telegram_config_reset (v0.12.0, schema-driven in v0.12.1, prompt fix in v0.16.1) ---
 //
 // Schema-driven recovery primitive. Walks the JSON Schema, fills in
 // any missing fields with the schema's `default` value, preserves
@@ -494,15 +494,27 @@ export function registerConfigWriteTool(pi: ExtensionAPI): void {
 // are their defaults" — not a hardcoded JSON in source. New fields
 // added in future schema versions are auto-applied to existing files
 // when reset is called.
+//
+// v0.16.1: prompt overhaul. The previous promptGuidelines were too
+// cautious — the agent would ask "which reset do you want?" when
+// the operator said "reset config", even though config_reset is the
+// obvious tool for the job. The new prompt explicitly marks
+// config_reset as the DEFAULT interpretation of "reset config" and
+// tells the agent to just call it. Also fixed a stale "restart
+// required" line in the description (the v0.14.0 hot-reload made
+// that wrong, but only the promptGuidelines were fixed in v0.14.2).
 
 const CONFIG_RESET_PROMPT = {
 	description:
-		"Schema-driven migration of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Walks the JSON Schema, fills in any MISSING fields with the schema's `default` value, and preserves the operator's existing values. Backs up the current file to a timestamped `.bak.<unix-ms>` before writing, so the previous state is recoverable. Use this to migrate a stale file to a newer schema version, to recover from a bad edit, or to fill in fields the LLM never set. Reminder: changes take effect only after the agent session is restarted — inform the operator.",
-	promptSnippet: "Schema-driven migration of the companion settings (fills missing fields with schema defaults, preserves existing values, timestamped backup).",
+		"Schema-driven migration of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). This is the DEFAULT interpretation of 'reset config' for this extension — when the operator says 'reset', 'migrate', 'fill in missing fields', 'update to current schema', 'rebuild from defaults', or 'I broke the config', call this tool. Walks the JSON Schema, fills in any MISSING fields with the schema's `default` value, and PRESERVES the operator's existing values. Backs up the current file to a timestamped `.bak.<unix-ms>` first so the previous state is recoverable via `cp`. ADDITIVE migration only — does NOT overwrite the operator's existing values. The tool takes no parameters. Changes take effect on the next turn (hot-reload is on, v0.14.0+); no session restart needed.",
+	promptSnippet:
+		"Schema-driven migration: fills missing fields with schema defaults, preserves existing values, timestamped backup. The default interpretation of 'reset config'.",
 	promptGuidelines: [
-		"Use pi_voice_telegram_config_reset when the operator asks to reset, roll back, fill in missing fields, or migrate the file to the current schema. Especially useful after upgrading the extension (a new schema version may add fields that the existing file doesn't have).",
-		"The tool does NOT take any parameters — it always walks the bundled schema and applies defaults to missing fields. Operator-set values are preserved. The result reports which dotted paths were added (e.g., 'tools.writable', 'stt.timeoutMs').",
-		"After a successful reset, tell the operator: 'the migration takes effect on the next turn (hot-reload is on, v0.14.0+). No session restart needed. Your previous settings are in ~/.pi/agent/pi-voice-telegram.json.bak.<timestamp>'. If they want to keep their old values, the backup is recoverable via `cp`.",
+		"Use pi_voice_telegram_config_reset as the DEFAULT action when the operator says 'reset config', 'reset the settings', 'migrate the config', 'fill in missing fields', 'update to current schema', 'rebuild from defaults', 'I broke the config', or 'sync the file with the schema'. DO NOT ask for clarification on which reset they want — if the request maps to any of these phrasings, call the tool. Clarification is only needed if the request is genuinely ambiguous (e.g. 'reset tts.voice' is a single-value reset, see below).",
+		"Disambiguation from config_write: if the operator asks to reset a SINGLE VALUE (e.g. 'reset tts.voice to Cantonese_PlayfulMan', 'set tts.lang back to default'), use pi_voice_telegram_config_write with the specific value — that's a different operation. The reset tool here is for the WHOLE FILE (fill all missing fields), not a single value.",
+		"The tool does NOT take any parameters — it always walks the bundled schema and applies defaults to missing fields. Operator's existing values are preserved (additive migration, not destructive). The result reports which dotted paths were added.",
+		"Safety net: the tool backs up the current file to `pi-voice-telegram.json.bak.<unix-ms>` first, so if the migration is wrong the operator can `cp ${backupPath} ${result.path}` to restore. This is why you can call it without asking — there's a real recovery path. The cost of an unnecessary reset is one timestamped `.bak` file; the cost of asking is operator friction.",
+		"After a successful reset, tell the operator: 'migration done. N fields added from schema defaults. Your previous settings are in ~/.pi/agent/pi-voice-telegram.json.bak.<timestamp> — recoverable via `cp`. Hot-reload is on, so the changes take effect on the next turn (no session restart).'",
 	],
 };
 
