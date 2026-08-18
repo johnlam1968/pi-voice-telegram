@@ -1,5 +1,18 @@
 # v0.5.0 patch: synthesis provider reads from pi-voice-telegram.json
 
+> **⚠️ DEPRECATED as of 2026-08-17 (v0.15.0+)**
+>
+> This patch is **fully superseded** by `pi-voice-telegram@0.15.0+`. The v0.15.0
+> release ships the JSON-reading design natively in `synthesis-provider.ts` —
+> no patch required on the cluster. The `pi-agent-john` cluster was
+> upgraded from v0.5.0 + this patch to v0.16.1 on 2026-08-17 (see commit
+> history on master). The patch is kept in git history for forensic
+> reference; **do not apply it to any new cluster**.
+>
+> If you need to support an older cluster that can't be upgraded, see the
+> "When to remove the patch" section below — but the cluster's
+> `pi-sandbox` image rebuild + npm install is the right long-term fix.
+
 ## What this patches
 
 In the published `pi-voice-telegram@0.5.0` (the version baked into the
@@ -89,7 +102,7 @@ Check the synthesis path in the bridge's runtime events:
 `category: "pi-voice-telegram/tts"` should show successful
 synthesizes with the new voice/lang.
 
-## Voice ID catalog (from `MINIMAX-T2A-FINDINGS.md` §2b-bis)
+## Voice ID catalog (from `MINIMAX-T2A-FINDINGS.md` §2b-bis + the official system voice ID catalog at `https://platform.minimaxi.com/docs/faq/system-voice-id`)
 
 Verified-safe voices against `api.minimaxi.com/v1/t2a_v2` with
 `model=speech-2.8-hd`:
@@ -102,21 +115,33 @@ Verified-safe voices against `api.minimaxi.com/v1/t2a_v2` with
 | `Cantonese_KindWoman` | No parens, safe. |
 | `English_expressive_narrator` | Safe. |
 | `Cantonese_ProfessionalHost（M）` (and other paren forms) | **DELETED FROM CATALOG** as of 2026-08-15 — returns 2054 even with byte-correct IDs. Do not use. |
-| `Japanese_*` | **NOT in the documented catalog.** The 2026-08-15 findings don't list any Japanese voices. To use a Japanese voice, query `get_voice` directly and test candidates. The §2a byte-trap risk applies — Japanese voice IDs may have asymmetric parens like the ProfessionalHost variants. |
 
-For a "true" Japanese voice (Japanese speaker + Japanese
-pronunciation), the operator would need to:
-1. Query `POST https://api.minimaxi.com/v1/get_voice` to see the
-   current catalog (filter for Japanese voices)
-2. Test a few candidate IDs via `POST /v1/t2a_v2` with a short
-   sample text and check `base_resp.status_code === 0`
-3. Add the verified ID to `pi-voice-telegram.json` `tts.voice`
+### Japanese voices (15, all-ASCII, safe — 2026-08-17 catalog)
 
-For the immediate test scenario ("switch TTS to Japanese"), the
-current safe workaround is:
-- `tts.voice: "Cantonese_PlayfulMan"` (or any safe Cantonese voice)
+All Japanese voice IDs are pure ASCII (no parens, no §2a byte-trap
+risk). The user can pick any of these for true Japanese TTS:
+
+| Voice ID | Voice Name |
+|---|---|
+| `Japanese_IntellectualSenior` | Intellectual Senior |
+| `Japanese_DecisivePrincess` | Decisive Princess |
+| `Japanese_LoyalKnight` | Loyal Knight |
+| `Japanese_DominantMan` | Dominant Man |
+| `Japanese_SeriousCommander` | Serious Commander |
+| `Japanese_ColdQueen` | Cold Queen |
+| `Japanese_DependableWoman` | Dependable Woman |
+| `Japanese_GentleButler` | Gentle Butler |
+| `Japanese_KindLady` | Kind Lady |
+| `Japanese_CalmLady` | Calm Lady |
+| `Japanese_OptimisticYouth` | Optimistic Youth |
+| `Japanese_GenerousIzakayaOwner` | Generous Izakaya Owner |
+| `Japanese_SportyStudent` | Sporty Student |
+| `Japanese_InnocentBoy` | Innocent Boy |
+| `Japanese_GracefulMaiden` | Graceful Maiden |
+
+For "true" Japanese TTS, the operator can set:
+- `tts.voice: "Japanese_OptimisticYouth"` (or any from the table above)
 - `tts.lang: "Japanese"`
 
-The synthesis succeeds (Cantonese speaker, Japanese pronunciation).
-Not a true Japanese voice identity, but the language boost works.
+The synthesis uses a Japanese speaker with Japanese pronunciation.
 This is what `pi-agent-john` is configured with for the live test.
