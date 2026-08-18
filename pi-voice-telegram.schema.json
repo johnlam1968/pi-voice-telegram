@@ -25,49 +25,86 @@
 		},
 		"llm_tools": {
 			"type": "object",
-			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's `synthesize_voice` + `transcribe_audio` are gated on these flags. The `llm_tools.` namespace makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features (which run unconditionally; only their LLM-tool wrappers are gated here).",
+			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's 7 LLM tools are gated on these flags. The `llm_tools.` namespace makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features (which run unconditionally; only their LLM-tool wrappers are gated here).",
 			"additionalProperties": false,
 			"properties": {
 				"exposed": {
 					"type": "boolean",
 					"default": false,
-					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false. v0.16.10: namespace renamed from `tools` to `llm_tools` (the `llm_tools.` prefix makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features). Internal field names (`exposed`, `tts.enabled`, `tts.name`, `stt.enabled`, `stt.name`) are unchanged. v0.16.9 had `tools.exposed`; v0.16.10 has `llm_tools.exposed`. BREAKING: any v0.16.9 config with `tools.*` will be treated as if the master switch is off (no LLM tools registered); rename `tools` to `llm_tools` in your config to migrate.",
+					"description": "Master switch for LLM tool registration. When false, none of the 7 LLM tools (synthesize_voice, transcribe_audio, pi_voice_telegram_schema, pi_voice_telegram_config_read / _write / _reset, pi_voice_telegram_list_voices) are registered. When true, registration is decided per-tool by `tools.<name>`. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false.",
 					"examples": [true, false]
+				},
+				"tools": {
+					"type": "object",
+					"description": "Per-tool gates. Each LLM tool can be individually enabled/disabled. Each tool the LLM sees is added to its prompt, and per-tool gates let operators trim the surface (saves tokens + reduces the LLM's decision space, which helps for agents that get confused by too many tool choices). Defaults: all 7 `true` (back-compat with v0.16.10's `everything on when exposed: true` behavior). Honored only when `llm_tools.exposed` is true. v0.16.12: replaces the v0.16.10 `llm_tools.tts.enabled` and `llm_tools.stt.enabled` shortcuts — the old fields are silently ignored; configs that had them at `false` need to migrate to `tools.synthesize_voice: false` / `tools.transcribe_audio: false` to keep the previous behavior.",
+					"additionalProperties": false,
+					"properties": {
+						"synthesize_voice": {
+							"type": "boolean",
+							"default": true,
+							"description": "TTS tool: lets the LLM generate an OGG/Opus voice file on demand. When false, the LLM cannot call this tool mid-conversation; the bridge's mirror-mode auto-voice still works (it goes through the synthesis provider, not this tool). v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"transcribe_audio": {
+							"type": "boolean",
+							"default": true,
+							"description": "STT tool: lets the LLM transcribe a local audio file via whisper-server. When false, the LLM cannot call this tool; the v0.16.7 echo pipeline still transcribes every voice message automatically. v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"pi_voice_telegram_schema": {
+							"type": "boolean",
+							"default": true,
+							"description": "Returns the companion settings JSON Schema as text. Pure documentation primitive; no side effects, no cost. When false, the LLM has no way to discover the schema (would have to remember it). v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"pi_voice_telegram_config_read": {
+							"type": "boolean",
+							"default": true,
+							"description": "Reads the current `pi-voice-telegram.json` (full or per-key). Read-only, no cost, no side effects. When false, the LLM can't see its current config — `pi_voice_telegram_config_write` should also be `false` in that case (or the LLM would be writing blind). v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"pi_voice_telegram_config_write": {
+							"type": "boolean",
+							"default": true,
+							"description": "Writes a single key to `pi-voice-telegram.json`. Schema-validated (refuses unknown keys), atomic (write-to-tmp + rename), with `.bak.<unix-ms>` backups. The LLM can modify its own config. Set to `false` to freeze the config (LLM can read + list, but not modify). v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"pi_voice_telegram_config_reset": {
+							"type": "boolean",
+							"default": true,
+							"description": "Schema-driven reset to the current default config. Walks the JSON Schema, fills in any MISSING field with the schema's `default`, preserves the operator's existing values. Set to `false` to prevent the LLM from invoking the reset. v0.16.12 default: true.",
+							"examples": [true, false]
+						},
+						"pi_voice_telegram_list_voices": {
+							"type": "boolean",
+							"default": true,
+							"description": "Returns the embedded 327-voice catalog (filterable by language / voiceName substring). Pure lookup primitive; lets the LLM find a valid voice ID instead of guessing and getting 2054 from MiniMax. v0.16.12 default: true.",
+							"examples": [true, false]
+						}
+					}
 				},
 				"tts": {
 					"type": "object",
-					"description": "TTS tool (text-to-speech).",
+					"description": "TTS tool name override. (The gate for the TTS tool was moved to `tools.synthesize_voice` in v0.16.12.)",
 					"additionalProperties": false,
 					"properties": {
-						"enabled": {
-							"type": "boolean",
-							"default": true,
-							"description": "Register the TTS tool. Honored only when `llm_tools.exposed` is true. Default true.",
-							"examples": [true, false]
-						},
 						"name": {
 							"type": "string",
 							"default": "synthesize_voice",
-							"description": "Override the tool name. Useful for namespace-collision avoidance. The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+), so renames are reflected in the LLM-facing strings.",
+							"description": "Override the TTS tool name. Useful for namespace-collision avoidance. The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+), so renames are reflected in the LLM-facing strings.",
 							"examples": ["synthesize_voice", "tts_cantonese", "tts_yue"]
 						}
 					}
 				},
 				"stt": {
 					"type": "object",
-					"description": "STT tool (speech-to-text).",
+					"description": "STT tool name override. (The gate for the STT tool was moved to `tools.transcribe_audio` in v0.16.12.)",
 					"additionalProperties": false,
 					"properties": {
-						"enabled": {
-							"type": "boolean",
-							"default": true,
-							"description": "Register the STT tool. Honored only when `llm_tools.exposed` is true. Default true.",
-							"examples": [true, false]
-						},
 						"name": {
 							"type": "string",
 							"default": "transcribe_audio",
-							"description": "Override the tool name. Same templating behavior as `llm_tools.tts.name`.",
+							"description": "Override the STT tool name. Same templating behavior as `llm_tools.tts.name`.",
 							"examples": ["transcribe_audio", "transcribe_yue", "stt_cantonese"]
 						}
 					}

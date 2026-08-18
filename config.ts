@@ -12,6 +12,18 @@
  * Auto-seed is idempotent — it only fires when the file is absent; an
  * existing file (operator-edited or hand-placed) is never overwritten.
  *
+ * v0.16.12: per-tool gates under `llm_tools.tools.<name>`. Each LLM
+ * tool can be individually enabled/disabled, replacing the
+ * v0.16.10 `llm_tools.tts.enabled` and `llm_tools.stt.enabled` shortcuts.
+ * Every tool the LLM sees is added to its prompt, and per-tool gates
+ * let operators trim the surface (saves tokens + reduces the LLM's
+ * decision space, which helps for agents that get confused by too
+ * many tool choices). Defaults: all 7 tools `true` (back-compat
+ * with v0.16.10's "everything on when exposed: true" behavior;
+ * the v0.16.10 `tts.enabled` / `stt.enabled` fields are silently
+ * ignored — operators who had them at `false` need to migrate to
+ * `tools.synthesize_voice: false` / `tools.transcribe_audio: false`).
+ *
  * v0.8.0: per-extension TTS and STT defaults move into the settings file
  * (replacing env-var-only configuration). Resolution order: explicit
  * JSON value > env var > hardcoded default. Env vars still work as
@@ -99,15 +111,35 @@ export interface CompanionConfig {
 		 * rename `tools` to `llm_tools` in your config to migrate.
 		 */
 		exposed?: boolean;
-		/** TTS tool: synthesize_voice. Default: enabled when `llm_tools.exposed` is true. */
+		/**
+		 * Per-tool gates. Each LLM tool can be individually enabled/disabled.
+		 * Defaults: all 7 `true` (back-compat with v0.16.10's "everything
+		 * on when exposed: true" behavior). Set a tool to `false` to hide
+		 * it from the LLM — useful for trimming prompt size and reducing
+		 * the LLM's decision space.
+		 *
+		 * v0.16.12: replaces the v0.16.10 `llm_tools.tts.enabled` and
+		 * `llm_tools.stt.enabled` shortcuts. The old fields are silently
+		 * ignored — configs that had `tts.enabled: false` need to
+		 * migrate to `tools.synthesize_voice: false` (and similarly for
+		 * STT) to keep the previous behavior.
+		 */
+		tools?: {
+			synthesize_voice?: boolean;
+			transcribe_audio?: boolean;
+			pi_voice_telegram_schema?: boolean;
+			pi_voice_telegram_config_read?: boolean;
+			pi_voice_telegram_config_write?: boolean;
+			pi_voice_telegram_config_reset?: boolean;
+			pi_voice_telegram_list_voices?: boolean;
+		};
+		/** TTS tool name override. Default: `synthesize_voice`. */
 		tts?: {
-			enabled?: boolean;
 			/** Override the tool name. Default: `synthesize_voice`. */
 			name?: string;
 		};
-		/** STT tool: transcribe_audio. Default: enabled when `llm_tools.exposed` is true. */
+		/** STT tool name override. Default: `transcribe_audio`. */
 		stt?: {
-			enabled?: boolean;
 			/** Override the tool name. Default: `transcribe_audio`. */
 			name?: string;
 		};
@@ -247,12 +279,21 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  */
 const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-	_hint: "pi-voice-telegram companion settings (v0.16.11+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.8: tts.verifyAfterSynthesize default is false (was true in v0.16.0–v0.16.7); set to true to opt into a whisper-stt language-detection self-check on every synthesis that logs under `category: \"pi-voice-telegram/tts-verify\"`. v0.16.9: tools.enabled renamed to tools.exposed. v0.16.10: tools namespace renamed to llm_tools (the llm_tools. prefix makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features).",
+	_hint: "pi-voice-telegram companion settings (v0.16.12+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.8: tts.verifyAfterSynthesize default is false (was true in v0.16.0–v0.16.7); set to true to opt into a whisper-stt language-detection self-check on every synthesis that logs under `category: \"pi-voice-telegram/tts-verify\"`. v0.16.9: tools.enabled renamed to tools.exposed. v0.16.10: tools namespace renamed to llm_tools (the llm_tools. prefix makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features). v0.16.12: per-tool gates under llm_tools.tools.<name> replace the v0.16.10 llm_tools.tts.enabled and llm_tools.stt.enabled shortcuts. Defaults: all 7 tools true when llm_tools.exposed is true; set a tool to false to hide it from the LLM.",
 	inbound: { echoEnabled: true },
 	llm_tools: {
 		exposed: false,
-		tts: { enabled: true, name: "synthesize_voice" },
-		stt: { enabled: true, name: "transcribe_audio" },
+		tools: {
+			synthesize_voice: true,
+			transcribe_audio: true,
+			pi_voice_telegram_schema: true,
+			pi_voice_telegram_config_read: true,
+			pi_voice_telegram_config_write: true,
+			pi_voice_telegram_config_reset: true,
+			pi_voice_telegram_list_voices: true,
+		},
+		tts: { name: "synthesize_voice" },
+		stt: { name: "transcribe_audio" },
 	},
 	tts: {
 		voice: TTS_FALLBACKS.voice,

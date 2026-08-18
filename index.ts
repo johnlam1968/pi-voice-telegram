@@ -289,15 +289,18 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			);
 		}
 
-		// (3) LLM tool surface — opt-in via `llm_tools.exposed: true`.
-		//     (v0.16.10: namespace renamed from `tools` to `llm_tools`;
-		//     internal field names unchanged. v0.16.9 had `tools.exposed`;
-		//     v0.16.10 has `llm_tools.exposed`. The `llm_tools.` prefix
-		//     makes it explicit that these switches gate the LLM tool
-		//     surface, not the TTS/STT extension features — those run
-		//     unconditionally; only their LLM-tool wrappers are gated.)
+		// (3) LLM tool surface — opt-in via `llm_tools.exposed: true`,
+		//     then gated per-tool by `llm_tools.tools.<name>`. Each tool
+		//     the LLM sees is added to its prompt; per-tool gates let
+		//     operators trim the surface (saves tokens + reduces the
+		//     LLM's decision space). v0.16.12: per-tool gates replace
+		//     the v0.16.10 `llm_tools.tts.enabled` and
+		//     `llm_tools.stt.enabled` shortcuts.
 		if (cfg.llm_tools?.exposed === true) {
-			if (cfg.llm_tools.tts?.enabled !== false) {
+			const toolEnabled = (name: keyof NonNullable<typeof cfg.llm_tools.tools>): boolean =>
+				cfg.llm_tools?.tools?.[name] !== false;
+
+			if (toolEnabled("synthesize_voice")) {
 				registerSynthesizeVoiceTool({
 					pi,
 					agentDir,
@@ -305,7 +308,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 					tts: ttsDefaults,
 				});
 			}
-			if (cfg.llm_tools.stt?.enabled !== false) {
+			if (toolEnabled("transcribe_audio")) {
 				registerTranscribeAudioTool({
 					pi,
 					agentDir,
@@ -313,12 +316,24 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 					stt: sttDefaults,
 				});
 			}
-			// Documentation + introspection + config tools.
-			registerPiVoiceTelegramSchemaTool(pi);
-			registerConfigReadTool(pi);
-			registerConfigWriteTool(pi);
-			registerConfigResetTool(pi);
-			registerListVoicesTool(pi);
+			// Documentation + introspection + config tools. Each is
+			// gated individually so operators can disable the ones
+			// they don't need.
+			if (toolEnabled("pi_voice_telegram_schema")) {
+				registerPiVoiceTelegramSchemaTool(pi);
+			}
+			if (toolEnabled("pi_voice_telegram_config_read")) {
+				registerConfigReadTool(pi);
+			}
+			if (toolEnabled("pi_voice_telegram_config_write")) {
+				registerConfigWriteTool(pi);
+			}
+			if (toolEnabled("pi_voice_telegram_config_reset")) {
+				registerConfigResetTool(pi);
+			}
+			if (toolEnabled("pi_voice_telegram_list_voices")) {
+				registerListVoicesTool(pi);
+			}
 		}
 
 		// sttDefaults is used by the STT tool; when tools.stt.enabled
