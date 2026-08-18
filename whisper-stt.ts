@@ -8,11 +8,20 @@
  * bookkeeping. The contract is identical: read an audio file, POST it
  * to whisper-server, return the transcript on success.
  *
- * whisper-server (https://github.com/ahmetoner/whisper-asr-webservice)
+ * v0.16.5: body construction switched from a hand-rolled byte buffer
+ * to Node's built-in `FormData` (powered by undici). The hand-rolled
+ * version was the source of the v0.16.2 `,` echo bug (see `transcribe`
+ * for the full history). FormData handles the boundary placement
+ * correctly and is what the OpenAI Node SDK and other well-tested TS
+ * clients use under the hood.
+ *
+ * whisper-server (https://github.com/ggerganov/whisper.cpp/tree/master/examples/server)
  * keeps the model loaded in VRAM, so per-call latency is just network
  * + inference. The `--convert` flag on the server handles ffmpeg
  * conversion internally, so we can pass the OGG directly without
- * decoding client-side.
+ * decoding client-side. The same module also works with the
+ * ahmetoner/whisper-asr-webservice FastAPI server (the original
+ * target) — both speak the same multipart/form-data contract.
  *
  * Auth sources (priority order):
  *   1. `baseUrl` argument
@@ -99,6 +108,16 @@ export class WhisperSttError extends Error {
 /**
  * Transcribe an audio file to text via whisper-server.
  *
+ * v0.16.5: now uses Node's built-in `FormData` (powered by undici) instead
+ * of a hand-rolled byte-buffer `buildMultipart()`. The hand-rolled version
+ * was the source of the v0.16.2 `,` echo bug — a double `\r\n` between
+ * value and next boundary made cpp-httplib's parser include the trailing
+ * CRLF in the value, corrupting `language` to `"yue\r\n"`. FormData handles
+ * the boundary placement correctly and is what the OpenAI Node SDK and
+ * other well-tested TS clients use under the hood. The hand-rolled version
+ * was solving a problem that has a battle-tested, dependency-free,
+ * zero-cost solution built into the runtime.
+ *
  * @throws WhisperSttError on validation, network, or server failures.
  */
 export async function transcribe(args: SttArgs): Promise<string> {
@@ -115,34 +134,24 @@ export async function transcribe(args: SttArgs): Promise<string> {
 	const responseFormat = args.responseFormat ?? DEFAULT_RESPONSE_FORMAT;
 	const url = `${baseUrl}/inference`;
 
-	let bytes: Buffer;
-	try {
-		bytes = await readFile(args.inputPath);
-	} catch (err) {
-		throw new WhisperSttError(
-			`whisper-stt: cannot read ${args.inputPath}: ${(err as Error).message}`,
-			1,
-			{ inputPath: args.inputPath },
-		);
-	}
-
-	const boundary = `----pi${Date.now().toString(36)}`;
-	const filename = args.inputPath.split("/").pop() ?? "voice.ogg";
-	const body = buildMultipart(boundary, filename, bytes, lang, responseFormat);
+	const form = await buildSttForm({
+		inputPath: args.inputPath,
+		lang,
+		responseFormat,
+	});
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
 
 	let res: Response;
 	try {
+		// fetch + FormData sets Content-Type (with the right boundary)
+		// and Content-Length automatically. Do NOT set Content-Type
+		// manually — that would clobber the boundary.
 		res = await fetch(url, {
 			method: "POST",
 			signal: controller.signal,
-			headers: {
-				"Content-Type": `multipart/form-data; boundary=${boundary}`,
-				"Content-Length": String(body.length),
-			},
-			body,
+			body: form,
 		});
 	} catch (err) {
 		clearTimeout(timer);
@@ -197,6 +206,8 @@ export async function transcribe(args: SttArgs): Promise<string> {
  *
  * v0.16.0: initial implementation. The endpoint already existed in
  * whisper-server; the client just didn't expose it.
+ * v0.16.5: switched to the same FormData-based body construction as
+ * `transcribe()` (see v0.16.5 note on `transcribe`).
  *
  * @throws WhisperSttError on validation, network, or server failures.
  */
@@ -212,21 +223,12 @@ export async function detectLanguage(args: DetectArgs): Promise<DetectResult> {
 	const timeoutMs = args.timeoutMs ?? DEFAULT_DETECT_TIMEOUT_MS;
 	const url = `${baseUrl}/inference`;
 
-	let bytes: Buffer;
-	try {
-		bytes = await readFile(args.inputPath);
-	} catch (err) {
-		throw new WhisperSttError(
-			`whisper-stt: cannot read ${args.inputPath}: ${(err as Error).message}`,
-			1,
-			{ inputPath: args.inputPath },
-		);
-	}
-
-	const boundary = `----pi${Date.now().toString(36)}`;
-	const filename = args.inputPath.split("/").pop() ?? "voice.ogg";
-	// Pass `null` for the language field — that's what triggers detection.
-	const body = buildMultipart(boundary, filename, bytes, null, "verbose_json");
+	// No `language` field — that's what triggers detection.
+	const form = await buildSttForm({
+		inputPath: args.inputPath,
+		lang: null,
+		responseFormat: "verbose_json",
+	});
 
 	const controller = new AbortController();
 	const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -236,11 +238,7 @@ export async function detectLanguage(args: DetectArgs): Promise<DetectResult> {
 		res = await fetch(url, {
 			method: "POST",
 			signal: controller.signal,
-			headers: {
-				"Content-Type": `multipart/form-data; boundary=${boundary}`,
-				"Content-Length": String(body.length),
-			},
-			body,
+			body: form,
 		});
 	} catch (err) {
 		clearTimeout(timer);
@@ -300,75 +298,44 @@ export async function detectLanguage(args: DetectArgs): Promise<DetectResult> {
 	return { language, confidence, transcript, languageProbabilities };
 }
 
-function buildMultipart(
-	boundary: string,
-	filename: string,
-	fileBytes: Buffer,
-	lang: string | null,
-	responseFormat: string,
-): Buffer {
-	// v0.16.3: fix `,` echo bug.
-	//
-	// Root cause: cpp-httplib's multipart parser (used by whisper.cpp's
-	// whisper-server) searches for `\r\n--<boundary>` and treats everything
-	// BEFORE that as the field value. Our v0.16.2 body had BOTH a trailing
-	// `\r\n` on each value AND a leading `\r\n` on the next part, producing
-	// TWO CRLFs between value and next boundary. The parser would find the
-	// FIRST `\r\n` (the value's trailing one), so the value included the
-	// trailing CRLF: `language` became `"yue\r\n"` instead of `"yue"`.
-	// whisper.cpp rejected the malformed language code, fell back to a
-	// degenerate decode, and returned `,`. The same bug applied to
-	// `response_format` (became `"text\r\n"`), which fortunately matched
-	// no known format and silently fell back to the server's default JSON
-	// output — masking the bug for `text` mode.
-	//
-	// Fix: drop the trailing `\r\n` from each value. Each part (except the
-	// first) still starts with `\r\n--<boundary>`, so the sequence between
-	// value and next boundary becomes a single `\r\n` (provided by the next
-	// part's leading CRLF). Result: the parser extracts just the raw value
-	// bytes, matching what python-requests and curl produce.
-	//
-	// Verified via byte-level relay probes:
-	//   - buggy body (v0.16.2): HTTP 200, body `,`
-	//   - fixed body (v0.16.3): HTTP 200, body `我想睇下而家又點啦` (correct)
-	//   - same OGG, curl:       HTTP 200, body `我想睇下而家又點啦`
-	//
-	// The file content (raw bytes between file-part headers and the next
-	// boundary) is correctly extracted because the next part's leading
-	// `\r\n` provides the boundary delimiter. The closing boundary is
-	// also preceded by a `\r\n` so the last value's terminator and the
-	// closing's leading CRLF are the same byte sequence.
-	const CRLF = "\r\n";
-	const parts: Buffer[] = [
-		Buffer.from(
-			`--${boundary}${CRLF}` +
-				`Content-Disposition: form-data; name="file"; filename="${filename}"${CRLF}` +
-				`Content-Type: audio/ogg${CRLF}${CRLF}`,
-		),
-		fileBytes,
-	];
-	// Each subsequent part starts with `\r\n--<boundary>`. The leading
-	// `\r\n` is the previous part's terminator (file bytes terminator for
-	// the language part, language value terminator for the response_format
-	// part, response_format value terminator for the closing). The value
-	// itself has NO trailing `\r\n` — that's the parser's job to consume
-	// when it finds the next `\r\n--<boundary>`.
-	if (lang !== null) {
-		parts.push(
-			Buffer.from(
-				`${CRLF}--${boundary}${CRLF}` +
-					`Content-Disposition: form-data; name="language"${CRLF}${CRLF}` +
-					`${lang}`,
-			),
+/**
+ * Build the multipart/form-data body for a whisper-server inference call
+ * using Node's built-in `FormData` (powered by undici). Pass `lang: null`
+ * to omit the `language` field — that's what triggers whisper-server's
+ * auto-detect path.
+ *
+ * The audio file is read into a Buffer and wrapped in a `Blob` (with
+ * `type: "audio/ogg"`) so the multipart part has both a Content-Type and
+ * a filename. `fetch()` reads the FormData, generates a unique boundary,
+ * writes the proper `Content-Type: multipart/form-data; boundary=...`
+ * header, and computes `Content-Length` from the encoded body.
+ *
+ * v0.16.5: replaced the hand-rolled `buildMultipart()` byte buffer with
+ * this FormData-based approach. See the v0.16.5 note on `transcribe()`
+ * for the full history of why.
+ */
+async function buildSttForm(args: {
+	inputPath: string;
+	lang: string | null;
+	responseFormat: string;
+}): Promise<FormData> {
+	let bytes: Buffer;
+	try {
+		bytes = await readFile(args.inputPath);
+	} catch (err) {
+		throw new WhisperSttError(
+			`whisper-stt: cannot read ${args.inputPath}: ${(err as Error).message}`,
+			1,
+			{ inputPath: args.inputPath },
 		);
 	}
-	parts.push(
-		Buffer.from(
-			`${CRLF}--${boundary}${CRLF}` +
-				`Content-Disposition: form-data; name="response_format"${CRLF}${CRLF}` +
-				`${responseFormat}${CRLF}` +
-				`--${boundary}--${CRLF}`,
-		),
-	);
-	return Buffer.concat(parts);
+
+	const filename = args.inputPath.split("/").pop() ?? "voice.ogg";
+	const form = new FormData();
+	form.append("file", new Blob([bytes], { type: "audio/ogg" }), filename);
+	if (args.lang !== null) {
+		form.append("language", args.lang);
+	}
+	form.append("response_format", args.responseFormat);
+	return form;
 }

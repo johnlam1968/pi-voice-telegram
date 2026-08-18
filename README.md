@@ -407,6 +407,26 @@ npm test
 
 ## Changelog
 
+### v0.16.5 — use Node's built-in `FormData` for the STT body
+
+The v0.16.3 root-cause fix (drop the trailing `\r\n` on each multipart value) is correct but fragile — `buildMultipart()` is ~40 lines of hand-rolled byte-buffer code that has to get the boundary placement exactly right to match cpp-httplib's parser. Anyone editing that function later could re-introduce the same trap.
+
+v0.16.5 deletes `buildMultipart()` and uses Node's built-in `FormData` (powered by undici) instead:
+
+```ts
+const form = new FormData();
+form.append("file", new Blob([bytes], { type: "audio/ogg" }), filename);
+if (lang !== null) form.append("language", lang);
+form.append("response_format", responseFormat);
+const res = await fetch(url, { method: "POST", body: form });
+```
+
+`fetch` + `FormData` sets `Content-Type: multipart/form-data; boundary=...` with the right boundary, computes `Content-Length` from the encoded body, and emits an RFC 7578-compliant multipart payload. This is the same approach the OpenAI Node SDK and other well-tested TS clients use internally.
+
+**Net change:** -110 lines, +77 lines. The `buildMultipart` boundary-placement comment block (~30 lines) is gone — the only reason it existed was to warn future editors about cpp-httplib's parser quirk, and now there's no hand-rolled boundary logic to warn about.
+
+**Verified:** the same three voice OGGs (4500, 4503, 4506) produce the same correct transcripts as v0.16.4, with both `lang="yue"` and `lang=null`. `detectLanguage()` still returns proper verbose_json with `detected_language` and confidence.
+
 ### v0.16.4 — remove the v0.16.2 fallback retry
 
 Once the root cause of the `,` echo bug was identified and fixed in v0.16.3 (double `\r\n` in the multipart body), the v0.16.2 fallback retry in `echo.ts` became dead code. The primary STT result is now reliable; if it returns empty (very short audio, genuine silence, no-speech segments), the inbound handler skips the echo and the agent simply receives no transcript. No retry, no band-aid, no extra round-trip to whisper-server.
