@@ -6,11 +6,11 @@ The extension provides three capabilities. The bridge's `telegram.json` decides 
 
 1. **Outbound TTS** — registers a voice synthesis provider on the bridge. The bridge calls it when `voice.replyMode` says so. The provider returns `{ audioPath, transcriptText }` when `voice.sendTranscript: true` (voice bubble with caption) or just the `oggPath` when `false` (voice bubble only).
 2. **Inbound echo** — registers a raw update handler that detects voice / audio messages, runs the configured STT client (`whisper-stt.ts` → `whisper-server`), and sends the user a `🎙️ "<i>transcript</i>"` reply. A programmatic inbound handler feeds the same transcript into the agent prompt. On by default; turn off via `inbound.echoEnabled: false` in the companion settings file.
-3. **LLM tool surface (v0.6.0+, opt-in)** — when `tools.enabled: true` in the companion settings file, registers four additional tools the agent can call explicitly:
+3. **LLM tool surface (v0.6.0+, opt-in)** — when `tools.exposed: true` in the companion settings file, registers four additional tools the agent can call explicitly:
    - `synthesize_voice` — wraps `voice-reply.ts` + `mm-tts.ts`. Writes a Telegram-ready OGG/Opus file and returns the path. The agent delivers it to the bound chat using the bridge's `telegram_attach` tool. Useful when `voice.replyMode` is `hidden` and the user has asked for a voice reply, or for ad-hoc voice (e.g. reading a file aloud).
    - `transcribe_audio` — wraps `whisper-stt.transcribe()`. Transcribes a local audio file via `whisper-server` and returns the transcript text.
-   - `pi_voice_telegram_schema` (v0.10.0+) — returns the companion settings JSON Schema as text. The LLM can call it to discover what knobs exist, their types, defaults, and valid values, before suggesting edits. Always registered when `tools.enabled` is true (it's documentation, not capability — no side effects). Pass the `key` parameter to fetch a specific section (e.g. `tts.voice`, `inbound.echoEnabled`); omit it for the full schema.
-   - `pi_voice_telegram_config_read` / `pi_voice_telegram_config_write` / `pi_voice_telegram_config_reset` (v0.11.0+ tools, refined v0.12.0+, schema-driven v0.13.0+) — let the LLM read the current settings, modify them via schema-validated atomic writes, and migrate the file to the current schema. The write tool refuses to modify `$schema`, `_hint`, or any key not in the schema. The reset tool is **schema-driven** (v0.13.0+): it walks the JSON Schema, fills in any MISSING fields with the schema's `default` value, and preserves the operator's existing values. The schema is the source of truth for "what fields exist and what their defaults are" — new fields added in future schema versions are auto-applied to existing files when reset is called. All three tools are registered whenever `tools.enabled` is true (no double opt-in). The promptGuidelines instruct the LLM to read first then write, and to evolve the config based on observed usage (e.g., when the operator keeps asking for English voice and the config is `Chinese,Yue`, propose or apply a change).
+   - `pi_voice_telegram_schema` (v0.10.0+) — returns the companion settings JSON Schema as text. The LLM can call it to discover what knobs exist, their types, defaults, and valid values, before suggesting edits. Always registered when `tools.exposed` is true (it's documentation, not capability — no side effects). Pass the `key` parameter to fetch a specific section (e.g. `tts.voice`, `inbound.echoEnabled`); omit it for the full schema.
+   - `pi_voice_telegram_config_read` / `pi_voice_telegram_config_write` / `pi_voice_telegram_config_reset` (v0.11.0+ tools, refined v0.12.0+, schema-driven v0.13.0+) — let the LLM read the current settings, modify them via schema-validated atomic writes, and migrate the file to the current schema. The write tool refuses to modify `$schema`, `_hint`, or any key not in the schema. The reset tool is **schema-driven** (v0.13.0+): it walks the JSON Schema, fills in any MISSING fields with the schema's `default` value, and preserves the operator's existing values. The schema is the source of truth for "what fields exist and what their defaults are" — new fields added in future schema versions are auto-applied to existing files when reset is called. All three tools are registered whenever `tools.exposed` is true (no double opt-in). The promptGuidelines instruct the LLM to read first then write, and to evolve the config based on observed usage (e.g., when the operator keeps asking for English voice and the config is `Chinese,Yue`, propose or apply a change).
 
 The extension does not impose any UX policy of its own. Whatever the operator sets in `telegram.json` (or via the bridge's settings UI) is what the user gets.
 
@@ -270,9 +270,9 @@ The seed is **idempotent and safe**:
 - If the write fails (read-only FS, permission denied), the extension's in-memory defaults still apply — no behavior change.
 - A malformed JSON file is kept intact, not silently overwritten. The extension's defaults apply; the operator sees the same content they had before.
 
-To enable tools after the seed, edit the file (flip `tools.enabled` to `true`) and restart the session. See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a copy-paste-ready file with tools enabled.
+To enable tools after the seed, edit the file (flip `tools.exposed` to `true`) and restart the session. See [`examples/pi-voice-telegram.json`](./examples/pi-voice-telegram.json) for a copy-paste-ready file with tools enabled.
 
-The auto-seeded file includes the same fields as `examples/pi-voice-telegram.json` (modulo the `tools.enabled` value). The two should be byte-equal; a sync-drift bug is recorded in PLAN.md as a v0.8.0 maintenance lesson.
+The auto-seeded file includes the same fields as `examples/pi-voice-telegram.json` (modulo the `tools.exposed` value). The two should be byte-equal; a sync-drift bug is recorded in PLAN.md as a v0.8.0 maintenance lesson.
 
 ```json
 {
@@ -299,10 +299,10 @@ The auto-seeded file includes the same fields as `examples/pi-voice-telegram.jso
 | Key | Default | What it does |
 |---|---|---|
 | `inbound.echoEnabled` | `true` | When `false`, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the `🎙️` confirmation. |
-| `tools.enabled` | `false` | Master switch for LLM tool registration. When `false`, none of the 7 LLM tools (synthesize_voice, transcribe_audio, pi_voice_telegram_schema, pi_voice_telegram_config_read / _write / _reset, pi_voice_telegram_list_voices) are registered. When `true`, they're all available. |
-| `tools.tts.enabled` | `true` | Register `synthesize_voice`. Honored only when `tools.enabled` is `true`. |
+| `tools.exposed` | `false` | Master switch for LLM tool registration. When `false`, none of the 7 LLM tools (synthesize_voice, transcribe_audio, pi_voice_telegram_schema, pi_voice_telegram_config_read / _write / _reset, pi_voice_telegram_list_voices) are registered. When `true`, they're all available. v0.16.9+: renamed from `tools.enabled` to `tools.exposed`. |
+| `tools.tts.enabled` | `true` | Register `synthesize_voice`. Honored only when `tools.exposed` is `true`. |
 | `tools.tts.name` | `synthesize_voice` | Override the tool name (rare; for namespace collision avoidance). The description / promptSnippet / promptGuidelines text is templated against the resolved name (v0.8.0+). |
-| `tools.stt.enabled` | `true` | Register `transcribe_audio`. Honored only when `tools.enabled` is `true`. |
+| `tools.stt.enabled` | `true` | Register `transcribe_audio`. Honored only when `tools.exposed` is `true`. |
 | `tools.stt.name` | `transcribe_audio` | Override the tool name. Templated like `tools.tts.name`. |
 | `tts.voice` | `Cantonese_PlayfulMan` | Default voice ID for both the bridge-driven TTS path and the `synthesize_voice` tool. Resolution: JSON > `$PI_MM_TTS_VOICE` > hardcoded. v0.8.0+. For valid voice IDs, see `pi_voice_telegram_list_voices` (v0.15.0+) — the catalog ships 327 voices across 24 languages. |
 | `tts.lang` | `Chinese,Yue` | Default language boost. JSON > `$PI_MM_TTS_LANG` > hardcoded. v0.8.0+. Independent of `tts.voice`: voice is the speaker identity, lang is the pronunciation. Cross-language voice+lang is the "boost" effect. |
@@ -321,9 +321,9 @@ The `tts.*` and `stt.*` fields (v0.8.0+) move the per-extension TTS/STT defaults
 
 **v0.16.0+:** every synthesis is followed by a whisper-stt language-detection self-check (when `tts.verifyAfterSynthesize: true`, opt-in since v0.16.8 — was the default in v0.16.0–v0.16.7). The result is logged under `category: "pi-voice-telegram/tts-verify"` in `~/.pi/agent/tmp/telegram/logs.jsonl` with the requested `tts.lang`, whisper's `detected_language`, the confidence, and a `match` boolean. Use this to spot the cross-language "boost" misfires — e.g. `voice=Japanese_OptimisticYouth + lang=Korean` may produce English audio (the boost effect), and the verification will catch it. Verification is best-effort: if whisper fails, the synthesis still succeeds and the error is logged separately.
 
-### LLM tools (registered when `tools.enabled: true`)
+### LLM tools (registered when `tools.exposed: true`)
 
-When `tools.enabled` is `true`, the agent gets **seven** tools. All are read-only or schema-validated-write; none bypass the JSON file the operator owns.
+When `tools.exposed` is `true`, the agent gets **seven** tools. All are read-only or schema-validated-write; none bypass the JSON file the operator owns.
 
 | Tool | What it does | v |
 |---|---|---|
@@ -335,7 +335,7 @@ When `tools.enabled` is `true`, the agent gets **seven** tools. All are read-onl
 | `pi_voice_telegram_config_reset` | Reset: schema-driven migration — fills MISSING fields with schema defaults, preserves operator's existing values. Backs up the previous file to `.bak.<unix-ms>`. | 0.12.0 + 0.13.0 |
 | `pi_voice_telegram_list_voices` | Discovery: return valid MiniMax TTS voice IDs from the embedded 327-voice catalog. Filter by `language` (e.g. 'Japanese', 'Cantonese') or `voiceName` (substring). | 0.15.0 |
 
-The first two wrap the in-process TTS/STT pipelines; the next four give the LLM end-to-end control of the companion settings file; the last is a discovery primitive for voice IDs (so the agent doesn't guess a wrong ID and get 2054). All seven are registered whenever `tools.enabled` is `true` — no per-tool sub-gate beyond `tools.tts.enabled` / `tools.stt.enabled` for the first two.
+The first two wrap the in-process TTS/STT pipelines; the next four give the LLM end-to-end control of the companion settings file; the last is a discovery primitive for voice IDs (so the agent doesn't guess a wrong ID and get 2054). All seven are registered whenever `tools.exposed` is `true` — no per-tool sub-gate beyond `tools.tts.enabled` / `tools.stt.enabled` for the first two.
 
 The `pi_voice_telegram_list_voices` tool ships a 327-entry catalog (`voices.json`, ~58KB) extracted from the official MiniMax system-voice page. The agent can call it to find a valid voice before writing `tts.voice` or before passing a per-call `voice` arg to `synthesize_voice`. Substring filter on either the English label or the original Chinese label — e.g. `language="japan"` resolves to "Japanese", `language="cantonese"` to the 6 Cantonese voices. The 15 Japanese voices are all-ASCII and safe (verified against the catalog as of 2026-08-17); prefer ASCII forms to avoid the §2a byte-trap documented in `patches/v0.5.0/README.md`.
 

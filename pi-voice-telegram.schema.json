@@ -28,10 +28,10 @@
 			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's `synthesize_voice` + `transcribe_audio` are gated on these flags.",
 			"additionalProperties": false,
 			"properties": {
-				"enabled": {
+				"exposed": {
 					"type": "boolean",
 					"default": false,
-					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false.",
+					"description": "Master switch for LLM tool registration. When false, none of the LLM-callable tools (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_schema`, `pi_voice_telegram_config_read` / `_write` / `_reset`, `pi_voice_telegram_list_voices`) are registered. When true, they're all available. Operator preference (token-cost + ergonomic), not a security boundary. A sufficiently capable LLM with `bash` + `write` can modify this file regardless. Default false. v0.16.9: renamed from `tools.enabled` to `tools.exposed` — the nested `tools.tts.enabled` and `tools.stt.enabled` are unchanged. BREAKING: configs with the old `tools.enabled` key will be treated as if the master switch is off (no tools registered); rename to `tools.exposed` to migrate.",
 					"examples": [true, false]
 				},
 				"tts": {
@@ -42,7 +42,7 @@
 						"enabled": {
 							"type": "boolean",
 							"default": true,
-							"description": "Register the TTS tool. Honored only when `tools.enabled` is true. Default true.",
+							"description": "Register the TTS tool. Honored only when `tools.exposed` is true. Default true.",
 							"examples": [true, false]
 						},
 						"name": {
@@ -61,7 +61,7 @@
 						"enabled": {
 							"type": "boolean",
 							"default": true,
-							"description": "Register the STT tool. Honored only when `tools.enabled` is true. Default true.",
+							"description": "Register the STT tool. Honored only when `tools.exposed` is true. Default true.",
 							"examples": [true, false]
 						},
 						"name": {

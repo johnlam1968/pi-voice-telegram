@@ -40,7 +40,7 @@
  *      on by default; turn it off via `inbound.echoEnabled: false` in
  *      `~/.pi/agent/pi-voice-telegram.json`.
  *
- *   3. LLM tool surface (opt-in) — when `tools.enabled: true` in the
+ *   3. LLM tool surface (opt-in) — when `tools.exposed: true` in the
  *      companion settings file, register two additional tools the
  *      agent can call explicitly:
  *        - `synthesize_voice` (wraps `voice-reply.ts` + `mm-tts.ts`)
@@ -113,7 +113,7 @@
  *         to the bundled defaults after backing up the previous
  *         state to a timestamped `.bak.<unix-ms>` file. The
  *         config-read and config-write tools are now registered
- *         whenever `tools.enabled` is true (no double opt-in).
+ *         whenever `tools.exposed` is true (no double opt-in).
  *         Security model: the container's filesystem permissions
  *         are the real boundary, not a JSON flag.
  * v0.11.0: added two more LLM tools, `pi_voice_telegram_config_read`
@@ -155,7 +155,7 @@
  *         surface; v0.7.0 makes the settings file discoverable by
  *         operators who upgrade.
  * v0.6.0: added the LLM tool surface (`synthesize_voice`,
- *         `transcribe_audio`) gated on `tools.enabled` in the companion
+ *         `transcribe_audio`) gated on `tools.exposed` in the companion
  *         settings file. The bridge-driven TTS and inbound echo paths
  *         are unchanged from v0.5.0.
  *
@@ -231,7 +231,7 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 	 * What hot-reload re-registers (v0.14.0):
 	 *   - Synthesis provider (always on; uses the latest TTS defaults)
 	 *   - Echo handlers (gated on `inbound.echoEnabled`)
-	 *   - All seven LLM tools (gated on `tools.enabled` + sub-flags)
+	 *   - All seven LLM tools (gated on `tools.exposed` + sub-flags)
 	 *   - The disposal-then-re-register pattern means previous
 	 *     registrations are removed before new ones go in.
 	 *
@@ -289,8 +289,11 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			);
 		}
 
-		// (3) LLM tool surface — opt-in via `tools.enabled: true`.
-		if (cfg.tools?.enabled === true) {
+		// (3) LLM tool surface — opt-in via `tools.exposed: true`.
+		//     (v0.16.9: renamed from tools.enabled → tools.exposed; the
+		//     nested tools.tts.enabled and tools.stt.enabled are
+		//     unchanged.)
+		if (cfg.tools?.exposed === true) {
 			if (cfg.tools.tts?.enabled !== false) {
 				registerSynthesizeVoiceTool({
 					pi,

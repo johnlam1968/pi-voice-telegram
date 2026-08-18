@@ -379,12 +379,12 @@ export function registerPiVoiceTelegramSchemaTool(pi: ExtensionAPI): void {
 
 const CONFIG_READ_PROMPT = {
 	description:
-		"Read the current value(s) of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Without a `key` parameter, returns the full settings object as formatted JSON. With a dotted-path `key` (e.g. 'tts.lang', 'inbound.echoEnabled', 'tools.enabled'), returns just that one value. Use this to inspect current state before suggesting edits and to confirm that prior writes took effect.",
+		"Read the current value(s) of the pi-voice-telegram companion settings file (~/.pi/agent/pi-voice-telegram.json). Without a `key` parameter, returns the full settings object as formatted JSON. With a dotted-path `key` (e.g. 'tts.lang', 'inbound.echoEnabled', 'tools.exposed'), returns just that one value. Use this to inspect current state before suggesting edits and to confirm that prior writes took effect.",
 	promptSnippet: "Reads the current companion settings (full or per-key).",
 	promptGuidelines: [
 		"Use pi_voice_telegram_config_read to inspect the operator's current settings before suggesting or applying edits. The agent should know what's already set.",
 		"Pass the `key` parameter for a single value, omit it for the full file. The dotted path uses the same lookup as the schema tool — short form ('tts.voice') works as well as explicit form.",
-		"This tool is registered whenever `tools.enabled: true` is set in the companion settings. If it's not available, the operator has the tool surface off — that is the only flag gating these tools.",
+		"This tool is registered whenever `tools.exposed: true` is set in the companion settings. If it's not available, the operator has the tool surface off — that is the only flag gating these tools.",
 	],
 };
 
@@ -452,7 +452,7 @@ export function registerConfigWriteTool(pi: ExtensionAPI): void {
 		parameters: Type.Object({
 			key: Type.String({
 				description:
-					"Dotted path to the key to set. E.g. 'tts.lang', 'inbound.echoEnabled', 'tools.enabled'. Refused: '$schema', '_hint', and any key not in the schema.",
+					"Dotted path to the key to set. E.g. 'tts.lang', 'inbound.echoEnabled', 'tools.exposed'. Refused: '$schema', '_hint', and any key not in the schema.",
 			}),
 			value: Type.Unknown({
 				description:
@@ -565,7 +565,7 @@ export function registerConfigResetTool(pi: ExtensionAPI): void {
 // right one for a language. The catalog is shipped as `voices.json`
 // in the npm package, parsed on demand (the file is small, ~58KB,
 // and rarely changes). The tool is read-only, no side effects.
-// Registered unconditionally when `tools.enabled: true`.
+// Registered unconditionally when `tools.exposed: true`.
 //
 // Why this exists: the agent can't otherwise know which voice IDs
 // are valid for MiniMax TTS. A wrong ID returns 2054 and the agent
