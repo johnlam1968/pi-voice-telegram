@@ -175,6 +175,7 @@ import {
 	clearTranscriptCache,
 	handleTelegramInboundForEcho,
 	handleTelegramUpdateForEcho,
+	setSttDefaults,
 } from "./echo.js";
 import {
 	loadCompanionConfig,
@@ -253,6 +254,12 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		// (2) Inbound echo — default on, opt-out via
 		// `inbound.echoEnabled: false`.
 		if (cfg.inbound?.echoEnabled !== false) {
+			// v0.16.2: push the JSON's resolved STT defaults (JSON >
+			// env > hardcoded) into the echo module before the handlers
+			// fire. The handlers read the module-level `currentSttDefaults`
+			// on each call, so this hot-reload flows through
+			// automatically with the existing fs.watch.
+			setSttDefaults(sttDefaults);
 			disposers.push(registerTelegramUpdateHandler(handleTelegramUpdateForEcho));
 			disposers.push(registerTelegramInboundHandler("voice", handleTelegramInboundForEcho));
 			disposers.push(registerTelegramInboundHandler("audio", handleTelegramInboundForEcho));

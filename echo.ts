@@ -45,9 +45,37 @@ import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { transcribe as runStt } from "./whisper-stt.js";
 
-// --- Configuration ---
+// --- Configuration (v0.16.2: JSON-driven, not env var) ---
 
-const STT_TIMEOUT_MS = Number(process.env.PI_TELEGRAM_STT_TIMEOUT_MS ?? "60000");
+/**
+ * Resolved STT defaults, set by `index.ts` `reconfigure()` on every
+ * hot-reload. Reads `~/.pi/agent/pi-voice-telegram.json`'s `stt.*`
+ * fields (JSON > env > hardcoded) — see `config.ts::resolveSttDefaults`.
+ *
+ * The echo path is JSON-driven because the JSON is the operator-facing
+ * dial. The previous v0.16.1 design read env vars + hardcoded
+ * directly, which left the JSON's `stt.lang` informational only — the
+ * actual STT call used `DEFAULT_LANG = "yue"` regardless of what the
+ * operator set. v0.16.2 fixes this: the JSON is the source of truth.
+ *
+ * If `lang` is undefined (operator cleared it, or hot-reload hasn't
+ * fired yet), the fallback is undefined → whisper-server auto-detects.
+ */
+interface ResolvedSttDefaults {
+	lang?: string;
+	baseUrl?: string;
+	timeoutMs: number;
+}
+
+let currentSttDefaults: ResolvedSttDefaults = {
+	lang: undefined,
+	baseUrl: undefined,
+	timeoutMs: 60_000,
+};
+
+export function setSttDefaults(defaults: ResolvedSttDefaults): void {
+	currentSttDefaults = defaults;
+}
 
 const TELEGRAM_API = "https://api.telegram.org";
 const TELEGRAM_FILE_LIMIT_BYTES = 20 * 1024 * 1024;
@@ -205,7 +233,54 @@ async function transcribeAndEcho(
     const inputPath = join(tmp, `voice${ext}`);
     try {
       await writeFile(inputPath, bytes);
-      const transcript = (await runStt({ inputPath, timeoutMs: STT_TIMEOUT_MS })).trim();
+      // v0.16.2: consume the JSON's stt.* (via the resolved defaults
+      // set by index.ts reconfigure). The previous code read
+      // `PI_TELEGRAM_STT_TIMEOUT_MS` from the env, which left the
+      // JSON's stt.lang / stt.baseUrl / stt.timeoutMs as
+      // informational-only. JSON is the source of truth.
+      const stt = currentSttDefaults;
+      const primary = (await runStt({
+        inputPath,
+        lang: stt.lang,
+        baseUrl: stt.baseUrl,
+        timeoutMs: stt.timeoutMs,
+      })).trim();
+      let transcript = primary;
+      // v0.16.2: defensive fallback. whisper on Cantonese audio with
+      // a forced lang="yue" hint occasionally returns degenerate
+      // outputs (single punctuation like "," or single-character
+      // garbage). The fix: if the result is empty OR a single char OR
+      // pure punctuation/whitespace, retry once with no lang hint —
+      // whisper-server will auto-detect the language, which my
+      // 2026-08-17 probes confirmed produces the verbatim Cantonese
+      // consistently. The original result is logged for debugging
+      // (visibility into the model's failure mode) but the retry's
+      // output is what the user sees. Single retry, no loop, to
+      // bound the cost of a bad model state.
+      if (
+        !transcript ||
+        transcript.length < 2 ||
+        /^[\s,.!?;:\-'"`~(){}\[\]\\/|]+$/.test(transcript)
+      ) {
+        recordTelegramRuntimeEvent(
+          "pi-voice-telegram/echo",
+          new Error(`stt primary result looked degenerate: ${JSON.stringify(primary)}`),
+          {
+            phase: "stt-fallback",
+            requestedLang: stt.lang,
+            primaryLength: primary.length,
+            chatId: message.chat.id,
+            messageId: message.message_id,
+          },
+        );
+        const retry = (await runStt({
+          inputPath,
+          // No lang → whisper auto-detects.
+          baseUrl: stt.baseUrl,
+          timeoutMs: stt.timeoutMs,
+        })).trim();
+        if (retry) transcript = retry;
+      }
       if (!transcript) return;
 
       // Cache BEFORE echoing so a slow echo can't race the inbound handler.
