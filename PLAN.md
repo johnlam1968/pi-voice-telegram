@@ -466,6 +466,112 @@ Caveat: `/home/john/pi-cluster/` is NOT a git repo, so Dockerfile.pi + docker-en
 - A test scaffold for the tool wrappers. The current test coverage (if any) is integration-level only.
 - Voice-catalog extensions: audio samples per voice, style-based search ("authoritative" → suggestions), auto-refresh from upstream (v0.16+ candidates out of v0.15.0 scope).
 
+## v0.16.7+ candidates (from `docs/CODE-FLOW.md` analysis, 2026-08-18)
+
+Self-critical review of flow #2 (outbound TTS) and flow #3 (inbound
+STT + echo) in `docs/CODE-FLOW.md`. Each item is a real issue in the
+v0.16.7 code path, not a hypothetical improvement.
+
+### Flow #2 — outbound TTS (`synthesis-provider.ts`)
+
+1. **`rate` layering bug (doc-vs-code drift).** The docstring at the
+   top of `synthesis-provider.ts` claims the layered default
+   resolution includes `telegram.json.outboundHandlers[voice].defaults.rate`,
+   but the code at `synthesis-provider.ts:137` resolves speed as
+   `Number(options?.rate ?? 1.0)` — the `defaults.rate` field is
+   read off the file but never used. An operator who sets
+   `telegram.json.outboundHandlers[voice].defaults.rate = 1.5` gets
+   1.0 from the synthesis. **Fix:** either add `defaults.rate` to
+   the `speed` resolution (`options?.rate ?? defaults.rate ?? 1.0`),
+   or drop `rate` from the docstring's claimed layering. The fix
+   is 1 line either way; the docstring change is the safer one
+   until a use case for `defaults.rate` is demonstrated.
+
+2. **Silent caption truncation.** When `text.length > 1024` and
+   `voice.sendTranscript === true`, the caption is clipped to 1023
+   chars + `…` while the audio is the full text. The user sees a
+   truncated caption but hears the full narration — a confusing
+   mismatch. The truncation is silent (no runtime event). **Fix:**
+   record `recordTelegramRuntimeEvent("pi-voice-telegram/tts", null,
+   { phase: "caption-truncated", textLength, captionLength: 1024 })`
+   so the operator can spot it happening. Consider also rejecting
+   the synthesis outright when `text.length > 1024` and forcing the
+   LLM to chunk.
+
+3. **TTS verify latency is wasted on success.** With
+   `tts.verifyAfterSynthesize: true`, the user gets the audio at
+   T+TTSSynth, and the verify fires at T+TTSSynth+~400ms. The
+   audio is already sent — the verify is post-hoc reporting only.
+   The value is the runtime event log entry, not the synthesis
+   outcome. If the verify never changes the behavior (no
+   rollback, no retry), consider fire-and-forget (don't await)
+   so the synthesis returns to the bridge immediately. Marginal
+   optimization; only matters at scale.
+
+4. **`telegram.json` re-read on every call.** The synthesis
+   provider does `readFile(agentDir + "/telegram.json")` on every
+   synthesis. ~500 bytes, ~50µs with Node's fd cache. Fine at
+   current call volumes; cache by mtime if it ever becomes a
+   bottleneck.
+
+5. **No retry on transient 5xx / network errors.** A single
+   `WhisperSttError code 2 or 4` or MiniMax 5xx kills the
+   synthesis. A retry with backoff (1s, 2s, 4s, max 3 retries)
+   would improve reliability for the ~1% of calls that hit a
+   transient failure. Costs ~7s of extra latency in the worst
+   case; negligible in the median. Defer until observed in
+   production.
+
+### Flow #3 — inbound STT + echo (`echo.ts`)
+
+6. **File-name-keyed chat-ID lookup is fragile.** The update
+   handler stashes the chat ID by `voice-<message_id>.<ext>` (built
+   from `fileNameFor(msg.message_id, ext)` at `echo.ts:163-165`).
+   The provider looks it up by `file.fileName` (the name the bridge
+   actually uses for the downloaded file). If the bridge's naming
+   convention differs from the deterministic name the update handler
+   assumed, `chatIdByFileName.get(file.fileName)` returns
+   `undefined` and the echo is silently dropped (the `if (chatId)`
+   block at `echo.ts:269` is skipped). **Verify empirically:**
+   does the bridge's `transcribeTelegramVoiceFileWithProviders`
+   pass the same `fileName` that `fileNameFor` produces? If not,
+   the fallback is to look up by `message_id` (which the provider
+   doesn't have) or to thread the chat ID through the bridge's
+   options object. The v0.16.7 design moves the silent-failure
+   mode from "empty transcript" (v0.16.6) to "name mismatch" — same
+   shape, different root cause. If the names don't match, this
+   needs to be fixed before the v0.16.7 e2e test is reliable.
+
+7. **Echo send failures are silently caught and dropped.** The
+   `try/catch` around `sendTelegramView` at `echo.ts:269-285`
+   swallows the error. If Telegram is down or the bot token is
+   invalid, the user gets no echo and the operator has no signal.
+   **Fix:** record
+   `recordTelegramRuntimeEvent("pi-voice-telegram/echo", err, { chatId, transcriptLength })`
+   in the catch. The transcript still goes to the LLM via the
+   return value (correct behavior), but the operator gets a
+   runtime event for diagnostic.
+
+8. **`mimeToExtension` is a guess.** The update handler picks the
+   extension from the Telegram `mime_type` field
+   (`echo.ts:167-176`). If the actual file extension differs (e.g.
+   voice is `audio/ogg; codecs=opus` → `.ogg` per the code, but
+   some clients send `audio/mpeg` for voice), the stashed name
+   won't match. **Verify:** this is a subset of item 6 (the
+   fileName lookup). The fix is the same: don't key the chat ID
+   by name; thread it through a different channel.
+
+9. **No STT result caching.** If the same file is re-sent (or the
+   bridge retries the provider call on a transient failure), the
+   whisper call is repeated. Cache key would be
+   `sha256(file.path + file.mtime)`. Low priority at current
+   call volumes; matters only at scale.
+
+10. **`telegram.json` re-read on every echo for the bot token.**
+    Same minor concern as item 4. The `loadBotToken` call at
+    `echo.ts:122-138` reads the file on every voice message.
+    Cache by mtime if it ever matters.
+
 ## Test matrix (v0.6.0+v0.7.0+v0.8.0 verification)
 
 All 6 original knobs verified against `pi-agent-john` on 2026-08-17:
