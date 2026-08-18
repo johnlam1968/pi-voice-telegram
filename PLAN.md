@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.16.0 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages). v0.16.0 added inline TTS self-check via whisper-stt language detection — every synthesis is verified, result logged under `pi-voice-telegram/tts-verify`.
+**Status:** v0.16.1 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages). v0.16.0 added inline TTS self-check via whisper-stt language detection — every synthesis is verified, result logged under `pi-voice-telegram/tts-verify`. v0.16.1 fixed the config_reset prompt so "reset config" maps directly to the tool without clarifying, and removed a stale "restart required" line from the description.
 
 ## What this is
 
@@ -376,6 +376,44 @@ Test 2 is the headline result — the operator asked for "Korean pronunciation" 
 
 **Live cluster note:** the cluster is on v0.5.0 + synthesis patch, so v0.16.0's verification isn't reachable on `pi-agent-john` until v0.16.0 is published. Same npm-publish blocker as v0.6.0+ features. The `patches/v0.5.0/` directory would need another backport (extend `synthesis-provider.ts` to call `detectLanguage` and log the result) if the operator wants verification on the cluster before the npm publish.
 
+## v0.16.1 — config_reset prompt fix + npm publish (shipped)
+
+**Why:** the operator reported a real UX bug — when they said "reset config" in Telegram, the agent asked "which reset do you want?" instead of just calling the tool. The previous `CONFIG_RESET_PROMPT` told the agent WHEN to use the tool but didn't say "just call it on these phrasings". A separate but related bug: the description still had a stale "changes take effect only after the agent session is restarted" line, which the v0.14.0 hot-reload made wrong (only the promptGuidelines were fixed in v0.14.2).
+
+**What shipped:**
+
+- `CONFIG_RESET_PROMPT` overhaul in `tools.ts`:
+  - Marks `config_reset` as the DEFAULT interpretation of "reset config" (and "migrate", "fill in missing fields", "update to current schema", "rebuild from defaults", "I broke the config").
+  - Tells the agent "DO NOT ask for clarification on which reset they want" on these phrasings.
+  - Disambiguates from `config_write`: single-value resets ("reset tts.voice to X") use `config_write` with the value; `config_reset` is for the WHOLE FILE.
+  - Cites the `.bak` safety net explicitly so the agent's cautious-by-default behavior is unblocked.
+  - Shorter after-action text (was a long paragraph; the LLM was relaying the whole thing).
+- Stale "restart required" line removed from the description.
+- Published to npm as `pi-voice-telegram@0.16.1` (the first npm publish via the v0.6.0+ feature set).
+- Cluster image build updated: `Dockerfile.pi` `PI_VOICE_TELEGRAM_VERSION` default 0.5.0 → 0.16.1, `docker-entrypoint.sh` `REQUIRED_PACKAGES` pi-voice-telegram line 0.5.0 → 0.16.1.
+
+**Tested via `docker exec pi-agent-john pi -e ./index.ts` (3 phrasings):**
+
+| Prompt | Tool called | Clarification? |
+|---|---|---|
+| "Reset the config." | `config_reset` | No — direct call |
+| "Migrate the pi-voice-telegram settings file to the current schema." | `config_reset` | No — direct call; agent added a helpful post-action note |
+| "Reset tts.voice to Cantonese_PlayfulMan." | `config_write` (single-value) | No — correctly disambiguated from `config_reset` |
+
+The disambiguation in test 3 is the part I'm most pleased with — the prompt steers the agent to the RIGHT tool for the request, not just the most defensive one.
+
+**Recurring release + cluster upgrade flow** (the user said "we should do this from time to time"):
+
+1. **Tag the release in the local repo**: `git tag -a v0.X.Y -m "..."`. The tag is the source of truth for what ships.
+2. **`npm publish` from the local repo root**. Auth is via `~/.npmrc` (`npm whoami` confirms `jwebster1968`).
+3. **Update `/home/john/pi-cluster/Dockerfile.pi`**: change `ARG PI_VOICE_TELEGRAM_VERSION=X.Y.Z` to the new version. (Or override at build time with `--build-arg PI_VOICE_TELEGRAM_VERSION=X.Y.Z` without editing the file.)
+4. **Update `/home/john/pi-cluster/docker-entrypoint.sh`**: change `'npm:pi-voice-telegram@X.Y.Z'` in `REQUIRED_PACKAGES`.
+5. **Rebuild the image**: `docker build -t pi-sandbox:latest -f /home/john/pi-cluster/Dockerfile.pi /home/john/pi-cluster`.
+6. **Stop the cluster, wipe the npm bind-mount dir, restart with the new image**. The entrypoint will re-seed `~/.pi/agent/npm/` from the pre-baked tree at `/opt/pi-defaults/npm/`.
+7. **Remove obsolete patches**: any `patches/v0.X.Y/` directory that the new version obsoletes (e.g. the v0.5.0+patch is fully superseded by v0.15.0+, so after the upgrade the cluster doesn't need it).
+
+Caveat: `/home/john/pi-cluster/` is NOT a git repo, so Dockerfile.pi + docker-entrypoint.sh changes are local-only. If you want a version-controlled copy, either `git init` the dir or copy the files into a separate repo. (Recommended: do that before the next upgrade cycle so the cluster's build state has a history.)
+
 ## Open design questions (deferred from v0.6.0)
 
 1. **Tool description should adapt to `voice.replyMode`.** When the bridge is in `hidden` mode, the tool's `promptGuidelines` should say: *"voice replies are not automatic in this session — use synthesize_voice when the user asks for an audio reply."* When in `mirror`/`always`, it should say: *"synthesize_voice is for ad-hoc voice (e.g. reading a file aloud), not for the turn reply — the bridge handles that."* The `ExtensionAPI` doesn't expose a "read telegram.json from inside promptGuidelines" hook, so the phrasing has to be baked in at `session_start` time (read once, choose one of two guideline sets). v0.6.0 ships a single guideline set that handles both cases; v0.7.0 can split it.
@@ -492,3 +530,4 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.14.0** — hot-reload the companion settings via `fs.watch` on the directory containing `pi-voice-telegram.json` (200ms debounce, file-level watching detached on Linux/Docker overlay so the directory is watched instead). The `reconfigure()` closure tears down + re-registers all capabilities; the synthesis provider reads the JSON on every call (via the v0.5.0+patch for the cluster) so TTS defaults take effect on the next bridge event. Best-effort: if `fs.watch` fails, the extension logs a warning and falls back to session_start-only behavior.
 - **v0.15.0** — `pi_voice_telegram_list_voices` tool backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages, ~58KB). The agent can now discover valid voice IDs in-band instead of guessing (and getting 2054). The catalog is rebuilt from the upstream page via `scripts/build-voice-catalog.py` and shipped in the npm package. Prompt nudges on `synthesize_voice`, `pi_voice_telegram_config_write`, and `pi_voice_telegram_schema` point at the new tool. The schema's `tts.voice` / `tts.lang` descriptions are updated to note the cross-language voice+lang "boost" semantics.
 - **v0.16.0** — inline TTS self-check via whisper-stt language detection. New `detectLanguage()` in `whisper-stt.ts` exposes the verbose_json detection that whisper-server already supports. New `tts.verifyAfterSynthesize` setting (default true) runs the check after every synthesis in both the bridge path (`synthesis-provider.ts`) and the LLM path (`synthesize_voice` tool). Result logged under `category: "pi-voice-telegram/tts-verify"` with `requestedLang`, `detectedLanguage`, `confidence`, and a `match` boolean. Catches the cross-language "boost" misfires that would otherwise silently produce audio in the wrong language. Adds ~500ms–1s per synthesis; opt out via `tts.verifyAfterSynthesize: false`.
+- **v0.16.1** — `CONFIG_RESET_PROMPT` overhaul so "reset config" maps directly to `pi_voice_telegram_config_reset` without the agent asking for clarification. The new prompt marks `config_reset` as the default interpretation of "reset config" and explicitly cites the `.bak` safety net to unblock the LLM's cautious-by-default behavior. Also fixed a stale "restart required" line in the description (the v0.14.0 hot-reload obsoleted it; only the promptGuidelines were fixed in v0.14.2). First npm publish via the v0.6.0+ feature set.
