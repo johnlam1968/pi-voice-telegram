@@ -183,8 +183,17 @@ export function createMmTtsSynthesisProvider(
 			return oggPath;
 		}
 
-		const caption =
-			text.length > CAPTION_MAX ? text.slice(0, CAPTION_MAX - 1) + "…" : text;
+		const wasTruncated = text.length > CAPTION_MAX;
+		const caption = wasTruncated
+			? text.slice(0, CAPTION_MAX - 1) + "…"
+			: text;
+		if (wasTruncated) {
+			recordTelegramRuntimeEvent("pi-voice-telegram/tts", null, {
+				phase: "caption-truncated",
+				textLength: text.length,
+				captionLength: CAPTION_MAX,
+			});
+		}
 
 		return { audioPath: oggPath, transcriptText: caption };
 	};
