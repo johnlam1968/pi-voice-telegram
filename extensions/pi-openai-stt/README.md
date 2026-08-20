@@ -45,10 +45,14 @@ Tune via env vars on the agent process:
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `OPENAI_STT_BASE_URL` | `https://api.openai.com/v1` | Any OpenAI-compatible API gateway. |
+| `OPENAI_STT_BASE_URL` | **Smart default**: `https://api.openai.com/v1` if `OPENAI_API_KEY` is set, else `http://127.0.0.1:8081/v1` (the local `fw-openai-sts` shim). | Any OpenAI-compatible API gateway. Override with this env var. |
 | `OPENAI_API_KEY` | (none — optional) | Bearer token. Only sent when set (the local shim ignores the header). |
 | `OPENAI_STT_MODEL` | `whisper-1` | The `model` form field. OpenAI's `whisper-1`; some gateways accept vendor-specific names. |
 | `PI_TELEGRAM_LANG` | `yue` | BCP-47 code passed as the `language` form field. |
+
+The smart default is the on-host default from PLAN.md §v0.4.0:
+- **No `OPENAI_API_KEY` set** → defaults to the local shim (`http://127.0.0.1:8081/v1`). Run `fw-openai-sts &` once on the host and the STT path "just works".
+- **`OPENAI_API_KEY=sk-...` set** → defaults to OpenAI's actual API (`https://api.openai.com/v1`). Set `OPENAI_STT_BASE_URL` to a different gateway if you want a custom one with a key.
 
 ## Protocol
 

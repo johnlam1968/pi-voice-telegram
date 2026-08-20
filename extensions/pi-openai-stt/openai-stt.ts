@@ -13,10 +13,12 @@
  *   - Any other OpenAI-compatible gateway
  *
  * Env vars (all read at call time, no caching):
- *   - `OPENAI_STT_BASE_URL` (default `https://api.openai.com/v1`).
- *   - `OPENAI_API_KEY` (optional; only the `Authorization` header is sent
- *     when the key is set. The local shim ignores the header; OpenAI's
- *     API requires it.)
+ *   - `OPENAI_STT_BASE_URL` (smart default: `https://api.openai.com/v1`
+ *     if `OPENAI_API_KEY` is set, else `http://127.0.0.1:8081/v1` for
+ *     the local `fw-openai-sts` shim). Override with this env var.
+ *   - `OPENAI_API_KEY` (optional; only the `Authorization` header is
+ *     sent when the key is set. The local shim ignores the header;
+ *     OpenAI's API requires it.)
  *   - `OPENAI_STT_MODEL` (default `whisper-1`).
  *   - `PI_TELEGRAM_LANG` (default `yue`).
  *
@@ -49,9 +51,14 @@ export interface OpenAiSttArgs {
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
-const DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_MODEL = "whisper-1";
 const DEFAULT_LANG = "yue";
+/** OpenAI's actual API. */
+const OPENAI_API_BASE_URL = "https://api.openai.com/v1";
+/** The local `fw-openai-sts` shim (forwards to the on-host CUDA
+ *  whisper-server with the model in VRAM). The on-host default —
+ *  matches the on-host setup from PLAN.md §v0.4.0. */
+const LOCAL_SHIM_BASE_URL = "http://127.0.0.1:8081/v1";
 
 export class OpenAiSttError extends Error {
 	constructor(
@@ -72,11 +79,17 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 		throw new OpenAiSttError("openai-stt: missing inputPath", 1);
 	}
 
-	const baseUrl = (args.baseUrl ?? process.env.OPENAI_STT_BASE_URL ?? DEFAULT_BASE_URL).replace(
-		/\/$/,
-		"",
-	);
+	// Smart default: if the operator has set OPENAI_API_KEY, assume they
+	// want OpenAI's actual API (which requires the key). Otherwise,
+	// assume they want the local `fw-openai-sts` shim (which doesn't
+	// check the key). This matches the on-host default from
+	// PLAN.md §v0.4.0 — the on-host path "just works" after the
+	// shim is running, and OpenAI's API users explicitly set both env
+	// vars (the key + the base URL).
 	const apiKey = args.apiKey ?? process.env.OPENAI_API_KEY;
+	const baseUrl = (args.baseUrl ?? process.env.OPENAI_STT_BASE_URL
+		?? (apiKey ? OPENAI_API_BASE_URL : LOCAL_SHIM_BASE_URL)
+	).replace(/\/$/, "");
 	const model = args.model ?? process.env.OPENAI_STT_MODEL ?? DEFAULT_MODEL;
 	const lang = args.lang ?? process.env.PI_TELEGRAM_LANG ?? DEFAULT_LANG;
 	const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
