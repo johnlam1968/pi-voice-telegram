@@ -7,7 +7,7 @@
  * Layered default resolution (first non-empty wins):
  *   1. bridge-supplied options (from `<!-- telegram_voice lang=… -->` or
  *      an upstream programmatic handler)
- *   2. `telegram.json.outboundHandlers[voice].defaults.{voice,lang,rate}`
+ *   2. `telegram.json.outboundHandlers[voice].defaults.{voice,lang}`
  *   3. provider-level defaults (env-overridable via PI_MM_TTS_VOICE /
  *      PI_MM_TTS_LANG / PI_MM_TTS_MODEL)
  *   4. hard-coded constants (Cantonese_PlayfulMan / Chinese,Yue / speech-2.8-hd)
@@ -49,7 +49,7 @@ import { detectLanguage as whisperDetectLanguage } from "./whisper-stt.js";
  * The synthesis provider reads the companion config to resolve its
  * defaults (JSON > env > hardcoded, see config.ts). The `telegram.json`
  * bridge file is still read on every call for the bridge-owned
- * `outboundHandlers[voice].defaults.{voice,lang,rate}` layering.
+ * `outboundHandlers[voice].defaults.{voice,lang}` layering.
  *
  * The companion config is read once per provider construction (which
  * happens at `session_start`), so changes to `pi-voice-telegram.json`
