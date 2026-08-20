@@ -683,7 +683,7 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 
 - **Phase A (v0.17.0):** recommendation 3 items that are low-risk provider-responsibility fixes. Doc-vs-code drift fix + one runtime event + one verification step (with a possible fix). No behavior change for unchanged inputs.
 - **Phase B (v0.17.1):** recommendation 2 — `getVoicePromptContribution` implementation. Pure addition, no behavior change.
-- **Phase C (v0.18.0):** recommendation 1 — `registerTelegramSection` migration. The biggest change — moves the 7 settings from a hidden JSON file to the bridge's Telegram UI. Backward-compatible: existing `pi-voice-telegram.json` files are still read as a fallback, with the Telegram UI as the new primary surface.
+- **Phase C (v0.18.0):** recommendation 1 — `registerTelegramSection` migration. The biggest change — **eliminates** the companion's `pi-voice-telegram.json` file entirely. Settings move into `telegram.json` under `extensions["pi-voice-telegram"]` (the canonical bridge config), exposed via a registered Telegram Extension Section. A one-time migration runs on first `session_start` for operators with an existing `pi-voice-telegram.json`: the file is read, its contents are written into `telegram.json`, and the old file is deleted. The companion config loader becomes `loadCompanionConfigFromTelegramJson()`. UI primitive: hybrid — boolean toggles are direct; finite-list values (voice × 327, lang × 24, model) open a sub-page with the valid list; free-text values (`stt.baseUrl`) enqueue a prompt to the agent (the only case where the agent is in the loop, because Telegram's inline keyboards don't do free-text input cleanly). Echo semantics: `inbound.echoEnabled` controls the 🎙️ reply in Telegram (the operator can verify transcription); the bridge owns the "transcribe at all" switch separately, so the two concerns don't get conflated.
 
 **Tech Stack:** existing ESM TypeScript (jiti-loaded, no build), JSON Schema (existing), the bridge's public API (`@llblab/pi-telegram/voice`, `/sections`, `/outbound`), `@sinclair/typebox` (existing peer dep).
 
@@ -779,9 +779,9 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - [ ] Tag the release: `git tag -a v0.17.1 -m "..."`
 - [ ] Cluster upgrade per PLAN.md:426-436
 
-### Phase C — v0.18.0: Voice Extension Section
+### Phase C — v0.18.0: Voice Extension Section (revised design)
 
-**Goal:** move the 7+ provider settings from a hidden JSON file (or env vars) to the bridge's Telegram UI, per `voice.md`'s `registerTelegramSection` recommendation. The companion's settings become discoverable in `/telegram-settings` like the bridge's own settings. The `pi-voice-telegram.json` file becomes a backward-compat fallback and (eventually) documentation only.
+**Goal:** eliminate the companion's `pi-voice-telegram.json` file entirely. Move all provider settings into `telegram.json` under `extensions["pi-voice-telegram"]`, exposed via a registered `Telegram Extension Section` (per `@llblab/pi-telegram/sections`). Settings become discoverable in `/telegram-settings` like the bridge's own settings, with a hybrid UI primitive (booleans direct, finite lists via sub-page, free-text via agent enqueue). A one-time migration runs on `session_start` for existing operators: `pi-voice-telegram.json` is read, its contents are written into `telegram.json`, and the old file is deleted. **No backward-compat fallback** — the section's data lives in `telegram.json` only.
 
 #### Task C1: Read the bridge's section API contract
 
@@ -798,82 +798,114 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - [ ] **Step 4:** If the section's persistence model is "the bridge stores the values in `telegram.json`", then `loadCompanionConfig` in `config.ts` needs to read from `telegram.json` (under the section's key) instead of from `pi-voice-telegram.json`. If the persistence model is "the section gets a callback to read/write wherever it wants" (e.g. `onValueChange: (values) => { ... }`), the migration is simpler. Document the chosen approach.
 - [ ] **Step 5:** If the API is missing in 0.28.0 but present in 0.36.5, note the dependency on the cluster upgrade (same as Phase B).
 
-#### Task C2: Design the section shape
+**Outcome (2026-08-19 verification):**
+- API import path: `@llblab/pi-telegram/sections` (also via `@llblab/pi-telegram/api/sections`).
+- Registration signature: `registerTelegramSection(section: TelegramSectionRegistration): () => void` — returns a disposer. Throws if no section registry is active.
+- Section shape (from `node_modules/@llblab/pi-telegram/lib/sections.ts`):
+  - `id` (unique per active registry), `label`, `order?`, `getLabel?`
+  - `render(ctx)` returns `{ text, parseMode?, replyMarkup? }` — used for the main-menu row
+  - `handleCallback(ctx)` returns `"handled" | "pass"` — for callback routing
+  - `settings?: { label, order?, getLabel?, open(ctx), handleCallback? }` — for the settings submenu
+  - `ctx` has: `callbackData(action, payload?)`, `edit(view)`, `open(view)`, `enqueuePrompt(text)`, `answerCallback(text)`, `deleteMessage()`, plus `sectionId`, `chatId`, `messageId`
+- Persistence model: **extensions own their own persistence**. The bridge does not store section values; the section's `render` reads from wherever it wants, and `handleCallback` writes wherever it wants. The chosen approach: settings live in `telegram.json` under `extensions["pi-voice-telegram"]`. The section reads + writes directly.
+- API availability: present in `@llblab/pi-telegram@0.28.0` (verified via `node_modules/@llblab/pi-telegram/lib/sections.ts:284`). No cluster upgrade needed for Phase C. (Phases B and C were both originally flagged as needing 0.36.5+ — verified not needed; both APIs are in 0.28.0 already.)
+
+#### Task C2: Design the section shape (revised — user feedback 2026-08-19)
 
 **Files:**
-- Modify: `pi-voice-telegram.schema.json` (extend the schema with the section's shape, or create a section-specific schema)
-- New: `docs/superpowers/plans/2026-08-19-voice-section.md` (the detailed Phase C design doc, after C1 clarifies the API)
+- Modify: `pi-voice-telegram.schema.json` (continues to be the schema source of truth; the section's writes are validated against it)
+- New: `voice-section.ts` (the section registration + render functions)
+- New: `telegram-config.ts` (load/set helpers that read/write `telegram.json` under `extensions["pi-voice-telegram"]`)
+- New: `migration.ts` (one-time migration of `pi-voice-telegram.json` → `telegram.json`)
 
-**Context:** the upstream says provider settings (voice, language, speech style, transcript behavior, STT/TTS enablement) belong in the section. pi-voice-telegram has all of these. The section needs a clean shape that maps 1:1 to the existing settings, with logical grouping.
+**Context (revised):** the user reviewed the proposed design and pushed back on two points: (a) the enqueue-prompt approach conflicts with a real UI — when the user clicks "Change" in a UI, the section should drive the value change directly, not enqueue a prompt that asks the agent to ask the user. (b) the `pi-voice-telegram.json` file should be eliminated entirely, with settings integrated into `telegram.json` (the canonical bridge config). The revised design has three primitives: direct toggles for booleans, sub-page picker for finite-list values, and a single enqueue-prompt fallback for free-text values. The status indicator reflects the `echoEnabled` flag (the 🎙️ display, not the transcription itself — the bridge owns the transcription switch separately, so the two concerns don't get conflated).
 
-- [ ] **Step 1:** Map each existing setting to a section control (using the API surface documented in C1):
-  - `tts.voice` — text input + a "list voices" affordance (calls `pi_voice_telegram_list_voices`)
-  - `tts.lang` — text input or dropdown
-  - `tts.model` — text input or dropdown
-  - `tts.verifyAfterSynthesize` — toggle
-  - `inbound.echoEnabled` — toggle
-  - `stt.lang` — text input
-  - `stt.baseUrl` — text input
-  - `llm_tools.exposed` — toggle (master)
-  - `llm_tools.tools.<name>` — 7 toggles
-- [ ] **Step 2:** Decide grouping: four groups — **TTS** (voice, lang, model, verify), **STT** (lang, baseUrl), **Inbound echo** (echoEnabled), **LLM tools** (exposed, the 7 tool gates).
-- [ ] **Step 3:** Write the section shape into the schema. If the section uses the same `pi-voice-telegram.schema.json` schema (most likely), extend it. Otherwise create a section-specific schema file.
-- [ ] **Step 4:** **Get user sign-off on the section shape before implementing** — present the design in the chat and wait for approval.
+**Mapping each setting to a section control:**
 
-#### Task C3: Implement the section registration in `index.ts`
+| Setting | Kind | Control | Action on click |
+|---|---|---|---|
+| `tts.voice` | finite-list (327 entries) | text + `[Change]` | sub-page lists 327 voices, user picks, section writes the new value |
+| `tts.lang` | finite-list (24) | text + `[Change]` | sub-page lists 24 languages, user picks, section writes |
+| `tts.model` | finite-list (~3) | text + `[Change]` | sub-page lists models, user picks, section writes |
+| `tts.verifyAfterSynthesize` | boolean | `[Toggle]` | section directly toggles, writes, re-renders |
+| `inbound.echoEnabled` | boolean | `[Toggle]` | section directly toggles, writes, re-renders |
+| `stt.lang` | finite-list (24) | text + `[Change]` | sub-page lists 24 languages, user picks, section writes |
+| `stt.baseUrl` | free-text | `[Set…]` | section enqueues a prompt to the agent (the only case where the agent is in the loop, because Telegram's inline keyboards don't do free-text input cleanly) |
+| `llm_tools.exposed` | boolean | `[Toggle]` | section directly toggles, writes, re-renders |
+| `llm_tools.tools.<name>` (7 entries) | boolean | `[Toggle]` | section directly toggles, writes, re-renders |
+
+**Status indicator:** `🟢` when `inbound.echoEnabled` is on, `⚫️` when off. Matches the user's mental model: echo is the 🎙️ reply, not the transcription itself.
+
+**Persistence model:** all settings live in `telegram.json` under `extensions["pi-voice-telegram"]`. The section's `render` reads from this key on every open. The `handleCallback` writes via an atomic JSON read-modify-write helper (`setCompanionConfigValue(key, value)` in the new `telegram-config.ts`). The schema is still `pi-voice-telegram.schema.json` (the section's writes are validated against it; rejected writes are answered with an `answerCallback` popup that shows the schema's error). The companion file `pi-voice-telegram.json` is **deleted** — no fallback, no coexistence.
+
+**Migration (one-time, on `session_start`):** if `pi-voice-telegram.json` exists at `agentDir`, read it, deep-merge its contents into `telegram.json`'s `extensions["pi-voice-telegram"]` block, then `unlink` the old file. The migration logs a single `recordTelegramRuntimeEvent` with `phase: "companion-config-migrated"`. After the migration, only `telegram.json` is read. Fresh installs have nothing to migrate; they pick up the defaults from the schema via `extensions["pi-voice-telegram"]` being absent (the section treats absent values as the schema's `default`).
+
+- [ ] **Step 1:** Map each existing setting to a section control (see table above). ✅ (done in the design above)
+- [ ] **Step 2:** Decide grouping: four groups — **TTS** (voice, lang, model, verify), **STT** (lang, baseUrl), **Inbound echo** (echoEnabled), **LLM tools** (exposed, the 7 tool gates). ✅
+- [ ] **Step 3:** Implement the section's `render` and `handleCallback` (and `settings.open` and `settings.handleCallback`) — see Task C3 for the file layout.
+- [ ] **Step 4:** **Get user sign-off on the section shape before implementing** — the revised design has been presented in the chat (2026-08-19, after the user's feedback on the enqueue-prompt / JSON-file questions). User feedback led to the hybrid UI + telegram.json integration. **Status: pending formal sign-off on this revised design before Task C3 starts.**
+
+#### Task C3: Implement the section registration + telegram.json persistence (revised)
 
 **Files:**
-- Modify: `index.ts` (add `registerTelegramSection` call in `reconfigure()`)
-- Modify: `config.ts` (read from the section's stored values first, fall back to `pi-voice-telegram.json` for backward compat)
-- Modify: `pi-voice-telegram.schema.json` (extend the description and `_hint` to mention the new primary surface)
+- New: `telegram-config.ts` — `loadCompanionConfigFromTelegramJson()` (reads `telegram.json` under `extensions["pi-voice-telegram"]`, with schema defaults for absent keys), `setCompanionConfigValue(key, value)` (atomic JSON read-modify-write of the same key, schema-validated), `migrateLegacyCompanionConfig()` (one-time: if `pi-voice-telegram.json` exists, merge into `telegram.json` and `unlink` the old file). Replaces the read path in `config.ts` and removes the `pi-voice-telegram.json` write path.
+- New: `voice-section.ts` — the section registration, with `render` and `handleCallback` for the main-menu row + `settings.open` and `settings.handleCallback` for the settings submenu. Reads values via `loadCompanionConfigFromTelegramJson()`; writes via `setCompanionConfigValue()`. The hybrid UI primitive: booleans → direct toggle; finite-list → sub-page picker; free-text → `enqueuePrompt` (only `stt.baseUrl`).
+- Modify: `config.ts` — replace `loadCompanionConfig()` body with a thin wrapper that calls `loadCompanionConfigFromTelegramJson()`. Remove the auto-seed of `pi-voice-telegram.json` (the file is gone). Keep the schema (`pi-voice-telegram.schema.json`) as the source of truth for defaults + validation.
+- Modify: `index.ts` — call `migrateLegacyCompanionConfig()` once at `session_start` (before `reconfigure()`); call `registerTelegramSection(voiceSection)` in `reconfigure()`; add the disposer to the `disposers` array (the existing hot-reload pattern at `index.ts:248-249`); keep the existing `fs.watch` on `telegram.json` (the file is now the persistence target).
+- Modify: `tools.ts` — the `pi_voice_telegram_config_read` / `_write` / `_reset` / `_schema` tools now read/write the `extensions["pi-voice-telegram"]` key in `telegram.json` (not `pi-voice-telegram.json`). The schema (`pi-voice-telegram.schema.json`) stays as the source of truth; the tools call `telegram-config.ts` helpers.
+- Modify: `pi-voice-telegram.schema.json` — the top-level description and the `_hint` field (no longer the file's content) reflect the new persistence: "Settings live in `telegram.json` under `extensions['pi-voice-telegram']`. Edit via the Voice Extension Section in Telegram Settings, or via `pi_voice_telegram_config_read`/`_write`/`_reset` from the LLM. The legacy `pi-voice-telegram.json` file was removed in v0.18.0; existing files are auto-migrated on first `session_start`." Drop the `_hint` and `$schema` fields from the auto-seeded JSON shape (the file is no longer written).
+- Modify: `package.json` — keep the schema in the `files` whitelist (it's still the source of truth). Remove the `pi-voice-telegram.json` reference if any (the file is gone).
 
-- [ ] **Step 1:** Import `registerTelegramSection` from `@llblab/pi-telegram/sections`.
-- [ ] **Step 2:** Build the section shape from the resolved config (using the Task C2 design).
-- [ ] **Step 3:** Call `registerTelegramSection(...)` in `reconfigure()` and add the disposer to the `disposers` array (the existing hot-reload pattern at `index.ts:248-249`).
-- [ ] **Step 4:** Update `loadCompanionConfig` in `config.ts` to read the section's stored values first, then fall back to `pi-voice-telegram.json` (so existing deployments don't break). Decide what happens when both are present: section wins (recommended), with a runtime event warning the operator that the JSON file is being ignored.
-- [ ] **Step 5:** Update the docstring at `config.ts:282` to point operators to the Telegram UI as the primary surface, with the JSON as a documented fallback. The current text "TTS/STT settings (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl, etc.) live in THIS file" becomes "TTS/STT settings now live in the Telegram Settings UI (Voice Extension Section). This file is a fallback for deployments that haven't yet adopted the UI."
-- [ ] **Step 6:** Update `pi-voice-telegram.schema.json`'s top-level description to reflect the new primary surface.
-- [ ] **Step 7:** Run `bash scripts/live-test.sh`. Should still pass.
-- [ ] **Step 8:** Manual probe: open `/telegram-settings` in Telegram, navigate to the new "Voice (pi-voice-telegram)" section, change `tts.voice`, save, verify the change takes effect on the next synthesis.
-- [ ] **Step 9:** Commit: `git commit -am "feat: register Voice Extension Section for provider settings"`.
+- [ ] **Step 1:** Write `telegram-config.ts` with `loadCompanionConfigFromTelegramJson`, `setCompanionConfigValue`, `migrateLegacyCompanionConfig`. The helpers read `<agentDir>/telegram.json`, parse, deep-merge the `extensions["pi-voice-telegram"]` block over the schema's defaults, and return the resolved config. `setCompanionConfigValue` does an atomic write (write to temp + rename) of `telegram.json` after schema-validating the new value.
+- [ ] **Step 2:** Write `voice-section.ts` with the section registration, including:
+  - `render(ctx)` for the main-menu row (status indicator based on `echoEnabled`)
+  - `handleCallback(ctx)` for any main-menu actions
+  - `settings.open(ctx)` that returns a view with the 4 groups and 12 setting rows
+  - `settings.handleCallback(ctx)` with the 3 primitives (toggle / sub-page / enqueue)
+- [ ] **Step 3:** Modify `index.ts` to call `migrateLegacyCompanionConfig()` at `session_start` (idempotent — checks for the old file's existence, no-ops if absent), then `registerTelegramSection(...)` in `reconfigure()`. Update the `fs.watch` path from `pi-voice-telegram.json` to `telegram.json`.
+- [ ] **Step 4:** Replace `loadCompanionConfig` in `config.ts` with a thin wrapper over the new helper. Remove the auto-seed logic. Keep the schema validation and the existing `resolveTtsDefaults` / `resolveSttDefaults` functions.
+- [ ] **Step 5:** Update `tools.ts` so the 4 LLM tools (config_read / config_write / config_reset / schema) read/write the new `telegram.json` key, not the old file. The schema is still `pi-voice-telegram.schema.json`.
+- [ ] **Step 6:** Update `pi-voice-telegram.schema.json` description and remove the auto-seeded JSON shape's `_hint` / `$schema` fields (the JSON is no longer written by the extension).
+- [ ] **Step 7:** On-host validation (per user note: best tested on the host's pi-coding-agent instance, not docker). Steps: install the new version, run the agent, open `/start` → Settings → 🎙️ Voice, toggle `echoEnabled`, verify the change takes effect on the next voice message. Manually edit a value in `telegram.json`, verify the section's `render` reflects the change.
+- [ ] **Step 8:** Commit (one commit per file group is fine, or a single ship commit if changes are interleaved). Suggested message: `feat: register Voice Extension Section, move settings to telegram.json`.
 
 #### Task C4: Update docs and docstrings
 
 **Files:**
-- Modify: `README.md` (Settings section, knobs table)
-- Modify: `docs/DESIGN-INTENT.md` (§6 "Self-describing config + LLM-friendly ergonomics" — note the new UI surface)
-- Modify: `docs/CODE-FLOW.md` (gitignored; keep in sync)
+- Modify: `README.md` (Settings section, knobs table) — point at the Telegram UI as the primary surface; remove the "edit `pi-voice-telegram.json`" instructions; add a "Telegram Settings → 🎙️ Voice" section.
+- Modify: `docs/DESIGN-INTENT.md` (§6 "Self-describing config + LLM-friendly ergonomics") — rewrite to note the section + `telegram.json` integration.
+- Modify: `docs/CODE-FLOW.md` (gitignored; keep in sync) — reflect the new config flow (section reads/writes `telegram.json`).
 
-- [ ] **Step 1:** Update the README's Settings section to point at the Telegram UI as the primary surface, with the JSON as a fallback.
-- [ ] **Step 2:** Update the README's knobs table to note the UI surface for each setting (one column or footnote).
-- [ ] **Step 3:** Update `docs/DESIGN-INTENT.md` §6 to note the section.
-- [ ] **Step 4:** Update `docs/CODE-FLOW.md` to reflect the new config flow (section first, JSON fallback).
+- [ ] **Step 1:** Update the README's Settings section.
+- [ ] **Step 2:** Update the README's knobs table (or replace with a pointer to the section).
+- [ ] **Step 3:** Update `docs/DESIGN-INTENT.md` §6.
+- [ ] **Step 4:** Update `docs/CODE-FLOW.md` (if it exists in the worktree).
 - [ ] **Step 5:** Commit: `git commit -am "docs: point operators at the new Voice Extension Section"`.
 
 #### Phase C ship checklist
 
 - [ ] Tasks C1-C4 committed on a feature branch and merged to `master`
-- [ ] Backward compat: existing `pi-voice-telegram.json` files are still read as a fallback (with a deprecation warning if both are present)
-- [ ] Live test passes
-- [ ] Manual UI probe passes (set a value in the Telegram UI, verify the change takes effect on the next synthesis)
-- [ ] `_hint` bumped to `v0.18.0+`
-- [ ] Top-of-file changelog in `index.ts` gets a `v0.18.0:` section
-- [ ] `package.json` version bumped to `0.18.0`
-- [ ] Migration note added to PLAN.md §"Migration notes"
-- [ ] File history bullet appended
-- [ ] Tag the release: `git tag -a v0.18.0 -m "..."`
-- [ ] Cluster upgrade per PLAN.md:426-436 (and ensure the cluster is on `@llblab/pi-telegram@0.36.5+` for the section API)
+- [ ] **One-time migration tested**: create a v0.17.1 `pi-voice-telegram.json`, install v0.18.0, run `session_start`, verify the file is gone, the values are in `telegram.json`, the section renders the right values, and the agent's runtime behavior matches the pre-migration state.
+- [ ] **Backward compat NOT preserved** (per the revised design): the legacy file is removed after migration. Operators with the legacy file MUST upgrade through v0.18.0 to keep their settings. Document this in the migration notes.
+- [ ] On-host UI probe passes (toggle `echoEnabled` in the Telegram UI, verify the change takes effect on the next voice message).
+- [ ] `_hint` removed from the auto-seeded JSON shape (the file is no longer written).
+- [ ] Top-of-file changelog in `index.ts` gets a `v0.18.0:` section.
+- [ ] `package.json` version bumped to `0.18.0`.
+- [ ] Migration note added to PLAN.md §"Migration notes" (one-time migration of legacy `pi-voice-telegram.json`).
+- [ ] File history bullet appended.
+- [ ] Tag the release: `git tag -a v0.18.0 -m "..."`.
+- [ ] Cluster upgrade per PLAN.md:426-436. **No bridge version dependency** (verified 0.28.0 has the section API).
 
 ## Self-review
 
 1. **Spec coverage:** all three recommendations are covered. Recommendation 1 → Phase C; Recommendation 2 → Phase B; Recommendation 3 → Phase A (with the v0.16.7+ candidates explicitly listed). ✅
 2. **Placeholder scan:** no TBDs. Task A3 has a real "3a or 3b" branch (verification first, then conditional fix) — not a placeholder. Task C1 says "document the API" — the implementer must read the bridge's docs before proceeding, this is a real prerequisite step. Task C2 step 4 has an explicit user sign-off checkpoint. ✅
 3. **Type consistency:** all modifications are to files that already exist (`synthesis-provider.ts`, `echo.ts`, `index.ts`, `config.ts`, `pi-voice-telegram.schema.json`). The new file `docs/superpowers/plans/2026-08-19-voice-section.md` is a Phase C artifact produced by Task C2, not a forward reference. The `registerTelegramSection` import is from `@llblab/pi-telegram/sections` per the upstream `voice.md`. ✅
-4. **Dependency on bridge version:** Phase B (Task B1) and Phase C (Task C1) both require the cluster to be on a bridge version that exposes the new APIs. Per the 2026-08-19 version check, `journal.ts` is byte-identical between 0.28.0 and 0.36.5, but the *new* APIs (sections, prompt contribution) are in the 8 new files added in 0.29.0–0.36.5. **The cluster upgrade to 0.36.5+ must happen before or alongside Phase B/C.** This is called out in B1 step 3 and C1 step 5.
+4. **Dependency on bridge version (revised 2026-08-19):** Phase B (Task B1) and Phase C (Task C1) were originally flagged as needing `@llblab/pi-telegram@0.36.5+`. **Verified not needed**: `getVoicePromptContribution` is in `node_modules/@llblab/pi-telegram/lib/voice.ts:64` of the installed 0.28.0, and `registerTelegramSection` is in `node_modules/@llblab/pi-telegram/lib/sections.ts:284` of the installed 0.28.0. Both APIs are present in 0.28.0; no cluster upgrade is required for Phases A, B, or C. The original concern was that the 8 new files added between 0.29.0 and 0.36.5 might be where the new APIs live — they are not; both APIs were present in 0.28.0 already.
 
 ## Migration notes (v0.17.0+ → ...)
 
 - **v0.16.12 → v0.17.0:** no breaking changes. Phase A is docstring + one runtime event + a verification step (and possibly a chat-ID fix if Task A3 finds a mismatch).
 - **v0.17.0 → v0.17.1:** no breaking changes. Phase B is a pure addition.
-- **v0.17.1 → v0.18.0:** **the cluster must be on `@llblab/pi-telegram@0.36.5+`** for the new APIs to register. Operators with existing `pi-voice-telegram.json` files do nothing — the file is still read as a fallback. Operators who prefer the new UI surface will see the section in `/telegram-settings`; the section's values take precedence over the JSON file. The auto-seed behavior is unchanged (still writes `pi-voice-telegram.json` on first start if missing); whether to keep the auto-seed after the section becomes the primary surface is a Phase C implementation decision (defer to Task C2 step 4 sign-off).
-- **Cluster upgrade dependency:** the plan depends on `@llblab/pi-telegram@0.36.5+` being available in the cluster's `REQUIRED_PACKAGES` (currently `0.28.0` per `pi-cluster/docker-entrypoint.sh`). The cluster upgrade is independent of this plan but must happen before Phase B and Phase C ship — see PLAN.md:426-436 for the upgrade recipe.
+- **v0.17.1 → v0.18.0 (revised design):** **no cluster upgrade required** (both APIs verified in `@llblab/pi-telegram@0.28.0`). Settings move from `pi-voice-telegram.json` to `telegram.json` under `extensions["pi-voice-telegram"]`. **One-time migration** runs at `session_start`: if `pi-voice-telegram.json` exists, the contents are deep-merged into `telegram.json`, and the old file is `unlink`-ed. After the migration, the old file is gone (no coexistence). The Voice Extension Section in `/telegram-settings` exposes the 12 settings (4 groups: TTS, STT, Inbound echo, LLM tools). The companion config loader becomes `loadCompanionConfigFromTelegramJson()`. **The cluster upgrade to 0.36.5+ remains worthwhile** for the new features in 0.29.0–0.36.5 (generative apps, skills, etc.) but is no longer a hard dependency of this plan.
+- **Backward-compat note:** the legacy `pi-voice-telegram.json` file is removed in v0.18.0 after the one-time migration. Operators who skip v0.18.0 and upgrade directly to a later version will lose their settings (no migration will run). The recommended upgrade path is: v0.17.1 → v0.18.0 (run once, migration fires) → subsequent versions.
