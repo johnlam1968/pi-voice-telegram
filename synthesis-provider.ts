@@ -35,6 +35,7 @@ import {
   getTelegramVoiceSendTranscript,
   type TelegramVoiceSynthesisProvider,
   type TelegramVoiceSynthesisProviderResult,
+  type TelegramVoiceTurnView,
 } from "@llblab/pi-telegram/voice";
 
 import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
@@ -123,7 +124,7 @@ export function createMmTtsSynthesisProvider(
 	const fallbackTimeout = tts.timeoutMs;
 	const verifyAfter = tts.verifyAfterSynthesize;
 
-	return async (
+	const synthesize: TelegramVoiceSynthesisProvider = async (
 		text: string,
 		options?: { lang?: string; rate?: string },
 	): Promise<TelegramVoiceSynthesisProviderResult> => {
@@ -197,6 +198,31 @@ export function createMmTtsSynthesisProvider(
 
 		return { audioPath: oggPath, transcriptText: caption };
 	};
+
+	// v0.17.1: voice prompt contribution for voice-tagged turns.
+	// Per @llblab/pi-telegram/voice.ts:281 (`computeVoicePromptContribution`),
+	// the bridge calls this when the turn is voice-tagged (mirror +
+	// voice input, or always mode) and appends the first non-empty
+	// provider contribution to the LLM's prompt. The intent is to
+	// shape the LLM's reply toward spoken style — the default
+	// (markdown, code blocks, bullet lists) is wrong for a voice note.
+	// The view arg carries voiceReplyPreferred / voiceReplyRequired /
+	// hasVoiceInput / userText for finer-grained context if needed later.
+	synthesize.getVoicePromptContribution = (
+		_view: TelegramVoiceTurnView,
+	): string | undefined => {
+		return [
+			"[voice-pipeline] This reply will be spoken aloud via the TTS provider.",
+			"Format for the ear, not the eye:",
+			"- No markdown (no *, #, backticks, links, or code blocks).",
+			"- No bullet/numbered lists; use flowing sentences.",
+			"- No URLs or file paths (the listener cannot follow them).",
+			"- Spell out abbreviations on first use (e.g. 'e.g.' → 'for example').",
+			"- Keep it under ~150 words unless the user asked for detail.",
+		].join("\n");
+	};
+
+	return synthesize;
 }
 
 /**
