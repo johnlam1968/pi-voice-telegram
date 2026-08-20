@@ -2,6 +2,15 @@
  * openai-stt — in-process client for the OpenAI `/v1/audio/transcriptions`
  * API gateway convention.
  *
+ * v0.4.5: `base_url` (and `OpenAiSttArgs.baseUrl`, and
+ * `OPENAI_STT_BASE_URL`) accept a fallback chain — a `string[]` of
+ * gateway URLs tried in order. The first non-empty transcript
+ * wins; empty results and `OpenAiSttError`s both fall through to
+ * the next URL. The natural on-host shape is
+ * `["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]` —
+ * local CUDA whisper-server runs free / low-latency until it dies,
+ * then OpenAI takes over for the same call.
+ *
  * v0.4.4: read `base_url` and `api_key` from `telegram.json` (the
  * bridge's canonical config file) before falling back to env vars
  * and the `auth.json` fallback. The recommended way to switch
@@ -32,12 +41,13 @@
  *   - `whisper-asr-webservice`
  *   - Any other OpenAI-compatible gateway
  *
- * Config resolution (first non-empty wins):
- *   1. Explicit `OpenAiSttArgs.baseUrl` / `.apiKey` (test path)
+ * Config resolution (first non-empty list wins):
+ *   1. Explicit `OpenAiSttArgs.baseUrl` (string or string[]; test path)
  *   2. `extensions["pi-openai-stt"].base_url` / `.api_key` in
- *      `telegram.json` (recommended for live config)
+ *      `telegram.json` (string or string[]; recommended for live config)
  *   3. `OPENAI_STT_BASE_URL` / `OPENAI_API_KEY` env vars
- *      (CI / container overrides)
+ *      (string for env, or comma-separated list for the fallback chain;
+ *      CI / container overrides)
  *   4. `auth.json` → `openai.key` (only for the API key; the base
  *      URL has no auth.json equivalent)
  *   5. Smart default: `https://api.openai.com/v1` if a key is
@@ -72,8 +82,16 @@ export interface OpenAiSttArgs {
 	lang?: string;
 	/** Per-call timeout in ms. Default: 60000. */
 	timeoutMs?: number;
-	/** Override the base URL. */
-	baseUrl?: string;
+	/** Override the base URL. Either a single gateway URL (string)
+	 *  or a fallback chain (string[]): the provider tries each URL
+	 *  in order, returning the first non-empty transcript, and falls
+	 *  through to the next on either an empty result or an
+	 *  `OpenAiSttError`. Useful for "local first, cloud fallback"
+	 *  topologies — set `telegram.json`'s `base_url` to
+	 *  `["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]` and
+	 *  the local shim runs free / low-latency until it dies, then
+	 *  OpenAI takes over. */
+	baseUrl?: string | string[];
 	/** Override the API key. */
 	apiKey?: string;
 	/** Override the model name. */
@@ -123,7 +141,7 @@ export class OpenAiSttError extends Error {
  *
  *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
  *  `pi-telegram-echo`'s `getAgentDir()` pattern). */
-function readTelegramJsonSttConfig(): { baseUrl?: string; apiKey?: string } {
+function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: string } {
 	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const configPath = join(dir, "telegram.json");
 	if (!existsSync(configPath)) return {};
@@ -134,8 +152,19 @@ function readTelegramJsonSttConfig(): { baseUrl?: string; apiKey?: string } {
 		};
 		const ext = parsed.extensions?.["pi-openai-stt"];
 		if (!ext || typeof ext !== "object") return {};
+		// `base_url` may be a single URL (string) or a fallback chain
+		// (string[]). Anything else is treated as unset.
+		let baseUrl: string | string[] | undefined;
+		if (typeof ext.base_url === "string" && ext.base_url) {
+			baseUrl = ext.base_url;
+		} else if (
+			Array.isArray(ext.base_url) &&
+			ext.base_url.every((v) => typeof v === "string" && v)
+		) {
+			baseUrl = ext.base_url as string[];
+		}
 		return {
-			baseUrl: typeof ext.base_url === "string" && ext.base_url ? ext.base_url : undefined,
+			baseUrl,
 			apiKey: typeof ext.api_key === "string" && ext.api_key ? ext.api_key : undefined,
 		};
 	} catch {
@@ -184,59 +213,47 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 	return undefined;
 }
 
-/** Transcribe an audio file via the OpenAI `/v1/audio/transcriptions`
- *  endpoint. Throws `OpenAiSttError` on validation, network, or
- *  server failures. */
-export async function transcribe(args: OpenAiSttArgs): Promise<string> {
-	if (!args.inputPath) {
-		throw new OpenAiSttError("openai-stt: missing inputPath", 1);
+/** Normalize a `string | string[] | undefined` config value into a
+ *  `string[]` of non-empty URLs. Drops non-string entries and empty
+ *  strings. The fallback-chain semantics in `transcribe()` want a
+ *  list, never a single string, so this is the one place we
+ *  canonicalize. */
+function normalizeBaseUrlList(value: unknown): string[] {
+	if (typeof value === "string") {
+		return value ? [value] : [];
 	}
+	if (Array.isArray(value)) {
+		return value.filter((v): v is string => typeof v === "string" && Boolean(v));
+	}
+	return [];
+}
 
-	// API key resolution: explicit arg > telegram.json > env var >
-	// auth.json fallback. The auth.json fallback is for the on-host
-	// path — operators who already have the key in `auth.json` (the
-	// LLM provider reads the same file) don't need to set a separate
-	// env var for STT. `telegram.json` is the bridge's canonical
-	// config file, so the operator can pin the key per profile
-	// without touching the environment. `firstNonEmpty` treats an
-	// empty string as unset so unsets fall through to the next
-	// option.
-	const telegramSttConfig = readTelegramJsonSttConfig();
-	const apiKey = firstNonEmpty(
-		args.apiKey,
-		telegramSttConfig.apiKey,
-		process.env.OPENAI_API_KEY,
-		readOpenAiKeyFromAuthJson(),
-	);
-
-	// baseUrl resolution: explicit arg > telegram.json > env var >
-	// smart default. The smart default picks OpenAI's actual API
-	// when a key is resolvable (any source) and the local
-	// `fw-openai-sts` shim otherwise. `telegram.json` is the
-	// recommended way to switch between local and cloud — set
-	// `extensions["pi-openai-stt"].base_url` to the gateway URL.
-	const baseUrl = firstNonEmpty(
-		args.baseUrl,
-		telegramSttConfig.baseUrl,
-		process.env.OPENAI_STT_BASE_URL,
-		apiKey ? OPENAI_API_BASE_URL : LOCAL_SHIM_BASE_URL,
-	)!.replace(/\/$/, "");
-	const model = args.model ?? process.env.OPENAI_STT_MODEL ?? DEFAULT_MODEL;
-	const lang = args.lang ?? process.env.PI_TELEGRAM_LANG ?? DEFAULT_LANG;
-	const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+/** Single-shot transcribe at one base URL. The loop in `transcribe()`
+ *  calls this for each URL in the fallback chain. Returns the
+ *  transcript (possibly empty) on success; throws `OpenAiSttError`
+ *  on validation, network, or server failures. The caller decides
+ *  whether an empty result means "fall through" or "give up". */
+async function transcribeAtBaseUrl(
+	inputPath: string,
+	baseUrl: string,
+	apiKey: string | undefined,
+	model: string,
+	lang: string,
+	timeoutMs: number,
+): Promise<string> {
 	const url = `${baseUrl}/audio/transcriptions`;
 
 	let bytes: Buffer;
 	try {
-		bytes = await readFile(args.inputPath);
+		bytes = await readFile(inputPath);
 	} catch (err) {
 		throw new OpenAiSttError(
-			`openai-stt: cannot read ${args.inputPath}: ${(err as Error).message}`,
+			`openai-stt: cannot read ${inputPath}: ${(err as Error).message}`,
 			1,
-			{ inputPath: args.inputPath },
+			{ inputPath },
 		);
 	}
-	const filename = args.inputPath.split("/").pop() ?? "voice.ogg";
+	const filename = inputPath.split("/").pop() ?? "voice.ogg";
 
 	// Build the multipart body. `request response_format=text` so the
 	// API returns plain text directly (no JSON unwrap).
@@ -316,4 +333,110 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 	const trimmed = text.trim();
 	if (!trimmed) return "";
 	return trimmed;
+}
+
+/** Transcribe an audio file via the OpenAI `/v1/audio/transcriptions`
+ *  endpoint. Throws `OpenAiSttError` on validation, network, or
+ *  server failures. v0.4.4: walks a fallback chain of base URLs
+ *  (one or more, in order), returning the first non-empty
+ *  transcript. Empty results and `OpenAiSttError`s both fall
+ *  through to the next URL. The final error is thrown if every URL
+ *  in the chain fails. */
+export async function transcribe(args: OpenAiSttArgs): Promise<string> {
+	if (!args.inputPath) {
+		throw new OpenAiSttError("openai-stt: missing inputPath", 1);
+	}
+
+	// API key resolution: explicit arg > telegram.json > env var >
+	// auth.json fallback. The auth.json fallback is for the on-host
+	// path — operators who already have the key in `auth.json` (the
+	// LLM provider reads the same file) don't need to set a separate
+	// env var for STT. `telegram.json` is the bridge's canonical
+	// config file, so the operator can pin the key per profile
+	// without touching the environment. `firstNonEmpty` treats an
+	// empty string as unset so unsets fall through to the next
+	// option.
+	const telegramSttConfig = readTelegramJsonSttConfig();
+	const apiKey = firstNonEmpty(
+		args.apiKey,
+		telegramSttConfig.apiKey,
+		process.env.OPENAI_API_KEY,
+		readOpenAiKeyFromAuthJson(),
+	);
+
+	// baseUrl resolution: explicit arg > telegram.json > env var >
+	// smart default. Each source can be a single URL or an array of
+	// URLs (fallback chain); the first non-empty list wins. The
+	// smart default is a single URL picked by whether a key is
+	// resolvable: OpenAI's API if yes, local shim if no.
+	//
+	// `telegram.json` is the recommended live config source — set
+	// `extensions["pi-openai-stt"].base_url` to either a URL or a
+	// `["local", "cloud"]` array.
+	const fromArgs = normalizeBaseUrlList(args.baseUrl);
+	const fromTelegram = normalizeBaseUrlList(telegramSttConfig.baseUrl);
+	const fromEnv = normalizeBaseUrlList(process.env.OPENAI_STT_BASE_URL);
+	const explicitList = fromArgs.length > 0
+		? fromArgs
+		: fromTelegram.length > 0
+			? fromTelegram
+			: fromEnv;
+	const baseUrls = (explicitList.length > 0
+		? explicitList
+		: [apiKey ? OPENAI_API_BASE_URL : LOCAL_SHIM_BASE_URL]
+	).map((u) => u.replace(/\/$/, ""));
+
+	const model = args.model ?? process.env.OPENAI_STT_MODEL ?? DEFAULT_MODEL;
+	const lang = args.lang ?? process.env.PI_TELEGRAM_LANG ?? DEFAULT_LANG;
+	const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+	// Walk the fallback chain. Empty result OR `OpenAiSttError` both
+	// fall through to the next URL. The last error is thrown if
+	// every URL fails; if they all returned empty (no errors), we
+	// throw a synthesized error so the caller always sees an
+	// `OpenAiSttError` rather than `undefined`.
+	let lastError: OpenAiSttError | undefined;
+	let emptyCount = 0;
+	for (const baseUrl of baseUrls) {
+		try {
+			const result = await transcribeAtBaseUrl(
+				args.inputPath,
+				baseUrl,
+				apiKey,
+				model,
+				lang,
+				timeoutMs,
+			);
+			if (result) return result;
+			emptyCount += 1;
+			// Empty result — fall through to the next URL.
+		} catch (err) {
+			if (err instanceof OpenAiSttError) {
+				lastError = err;
+			} else {
+				lastError = new OpenAiSttError(
+					err instanceof Error ? err.message : String(err),
+					1,
+					{ baseUrl },
+				);
+			}
+			// Errored — fall through to the next URL.
+		}
+	}
+
+	if (lastError) {
+		// Re-throw the last error but include the chain context so
+		// the operator can see how many URLs were tried and which
+		// ones were in the chain when nothing worked.
+		throw new OpenAiSttError(
+			`${lastError.message} (tried ${baseUrls.length} base URL(s) in order)`,
+			lastError.code,
+			{ ...lastError.detail, tried: baseUrls, emptyCount },
+		);
+	}
+	throw new OpenAiSttError(
+		`openai-stt: all ${baseUrls.length} base URL(s) returned empty transcripts`,
+		1,
+		{ tried: baseUrls, emptyCount },
+	);
 }
