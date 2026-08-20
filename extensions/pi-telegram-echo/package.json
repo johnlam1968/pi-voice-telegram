@@ -1,7 +1,7 @@
 {
   "name": "pi-telegram-echo",
-  "version": "0.3.1",
-  "description": "Voice echo extension for the Pi coding agent + @llblab/pi-telegram bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages. STT is delegated to a peer-dep provider extension (default: pi-whisper-stt) selected via extensions.pi-telegram-echo.stt_provider in telegram.json. The section is registered once per session so the in-Telegram menu buttons stay stable across hot-reloads.",
+  "version": "0.4.0",
+  "description": "Voice echo extension for the Pi coding agent + @llblab/pi-telegram bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages. STT is delegated to a peer-dep provider extension (default: pi-whisper-stt; alternative: pi-openai-stt for any OpenAI-compatible API gateway) selected via extensions.pi-telegram-echo.stt_provider in telegram.json. The section is registered once per session so the in-Telegram menu buttons stay stable across hot-reloads.",
   "type": "module",
   "license": "MIT",
   "main": "./index.ts",
@@ -25,7 +25,8 @@
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@llblab/pi-telegram": "*",
-    "pi-whisper-stt": "*"
+    "pi-whisper-stt": "*",
+    "pi-openai-stt": "*"
   },
   "pi": {
     "extensions": ["./index.ts"]

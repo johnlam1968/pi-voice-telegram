@@ -1,0 +1,27 @@
+{
+  "name": "pi-openai-stt",
+  "version": "0.1.0",
+  "description": "STT provider for any OpenAI-compatible API gateway. Implements the SttProvider contract from pi-telegram-echo; registers with id 'pi-openai-stt'. Talks POST /v1/audio/transcriptions. Env vars: OPENAI_STT_BASE_URL (default https://api.openai.com/v1), OPENAI_API_KEY (optional; only sent when set), OPENAI_STT_MODEL (default whisper-1), PI_TELEGRAM_LANG (default yue).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-telegram-echo": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

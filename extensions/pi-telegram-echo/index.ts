@@ -3,6 +3,28 @@
  *
  * ## Version history
  *
+ * v0.4.0 — add `pi-openai-stt` as a peer-dep provider and the
+ *         `fw-openai-sts` shim. The same STT contract
+ *         (`SttProvider`, looked up at call time from a
+ *         `globalThis`-backed registry) now works against
+ *         OpenAI-compatible API gateways: the on-host CUDA
+ *         `whisper-server` (CUDA + `ggml-large-v3.bin` in VRAM)
+ *         via the `fw-openai-sts` shim; OpenAI's actual API;
+ *         `faster-whisper-server` with `--enable-openai-api`;
+ *         `whisper-asr-webservice`; any other OpenAI-compatible
+ *         gateway. New STT backends become "another
+ *         `OPENAI_STT_BASE_URL` value" instead of "another
+ *         `pi-<backend>-stt` package". The on-host CUDA
+ *         `whisper-server` (PID 704, `--language yue
+ *         --no-timestamps --convert`) is unchanged — the shim
+ *         adds ~1ms of HTTP overhead. The `pi-whisper-stt` provider
+ *         is kept for back-compat (deprecated in v0.5.0, removed
+ *         in v0.6.0). The on-host setup is: `cp scripts/fw-openai-sts.ts
+ *         ~/.pi/agent/bin/fw-openai-sts; chmod +x
+ *         ~/.pi/agent/bin/fw-openai-sts; fw-openai-sts &; export
+ *         OPENAI_STT_BASE_URL=http://127.0.0.1:8081/v1`. Then
+ *         `stt_provider: "pi-openai-stt"` in `telegram.json`.
+ *
  * v0.3.1 — fix the v0.3.0 load-order race. The on-host test
  *         surfaced: `pi-telegram-echo` session_start fired first
  *         (registering the echo handler), the bridge processed
