@@ -2,24 +2,49 @@
  * openai-stt — in-process client for the OpenAI `/v1/audio/transcriptions`
  * API gateway convention.
  *
+ * v0.4.4: read `base_url` and `api_key` from `telegram.json` (the
+ * bridge's canonical config file) before falling back to env vars
+ * and the `auth.json` fallback. The recommended way to switch
+ * between local (`fw-openai-sts` shim) and cloud (OpenAI's actual
+ * API) is one line in `telegram.json`:
+ *
+ *   "extensions": {
+ *     "pi-openai-stt": { "base_url": "http://127.0.0.1:8081/v1" }
+ *   }
+ *
+ * v0.4.3: strip `language` for `api.openai.com` (OpenAI's Whisper
+ * rejects `yue` with HTTP 400 even though it's a valid ISO 639-1
+ * code; auto-detect handles Cantonese correctly). The local shim
+ * and other gateways keep `language`.
+ *
+ * v0.4.2: read `OPENAI_API_KEY` from `~/.pi/agent/auth.json` as a
+ * fallback. v0.4.1: smart default for `OPENAI_STT_BASE_URL`
+ * (OpenAI's API if a key is resolvable, local shim otherwise).
+ *
  * The same code talks to:
- *   - OpenAI's actual API (`OPENAI_STT_BASE_URL=https://api.openai.com/v1`,
- *     `OPENAI_API_KEY=sk-...`)
- *   - The local `fw-openai-sts` shim (the on-host `whisper-server` exposed
- *     as OpenAI-compatible; preserves the existing CUDA + large-v3-in-VRAM
- *     setup with zero changes to the inference engine)
+ *   - OpenAI's actual API (`base_url=https://api.openai.com/v1`,
+ *     `api_key=sk-...`)
+ *   - The local `fw-openai-sts` shim (the on-host `whisper-server`
+ *     exposed as OpenAI-compatible; preserves the existing CUDA +
+ *     large-v3-in-VRAM setup with zero changes to the inference
+ *     engine)
  *   - `faster-whisper-server` with `--enable-openai-api`
  *   - `whisper-asr-webservice`
  *   - Any other OpenAI-compatible gateway
  *
- * Env vars (all read at call time, no caching):
- *   - `OPENAI_STT_BASE_URL` (smart default: `https://api.openai.com/v1`
- *     if `OPENAI_API_KEY` is set, else `http://127.0.0.1:8081/v1` for
- *     the local `fw-openai-sts` shim). Override with this env var.
- *   - `OPENAI_API_KEY` (optional; only the `Authorization` header is sent
- *     when the key is set. The local shim ignores the header; OpenAI's
- *     API requires it.) v0.4.2 fallback: `~/.pi/agent/auth.json` →
- *     `openai.key` (if the env var is unset and the file is readable).
+ * Config resolution (first non-empty wins):
+ *   1. Explicit `OpenAiSttArgs.baseUrl` / `.apiKey` (test path)
+ *   2. `extensions["pi-openai-stt"].base_url` / `.api_key` in
+ *      `telegram.json` (recommended for live config)
+ *   3. `OPENAI_STT_BASE_URL` / `OPENAI_API_KEY` env vars
+ *      (CI / container overrides)
+ *   4. `auth.json` → `openai.key` (only for the API key; the base
+ *      URL has no auth.json equivalent)
+ *   5. Smart default: `https://api.openai.com/v1` if a key is
+ *      resolvable from any of the above, else the local shim
+ *      `http://127.0.0.1:8081/v1`
+ *
+ * Other env vars (no `telegram.json` equivalent — kept env-only):
  *   - `OPENAI_STT_MODEL` (default `whisper-1`).
  *   - `PI_TELEGRAM_LANG` (default `yue`).
  *
@@ -29,9 +54,10 @@
  *   3  API client (HTTP 4xx, or malformed response)
  *   4  API server (HTTP 5xx)
  *
- * The provider in `index.ts` re-wraps `OpenAiSttError` as `ProviderError`
- * to keep the registry's `code: 1|2|3|4` taxonomy consistent with
- * `pi-whisper-stt` and the old monolithic's `WhisperSttError`.
+ * The provider in `index.ts` re-wraps `OpenAiSttError` as
+ * `ProviderError` to keep the registry's `code: 1|2|3|4` taxonomy
+ * consistent with `pi-whisper-stt` and the old monolithic's
+ * `WhisperSttError`.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -72,6 +98,49 @@ export class OpenAiSttError extends Error {
 	) {
 		super(message);
 		this.name = "OpenAiSttError";
+	}
+}
+
+/** Read the `extensions["pi-openai-stt"]` block from `telegram.json`
+ *  (the bridge's canonical config file). Returns an empty object if
+ *  the file is missing, unreadable, malformed, or doesn't have the
+ *  block. The supported keys are:
+ *
+ *    - `base_url`  → overrides `OPENAI_STT_BASE_URL` (and the smart
+ *                    default that picks OpenAI's API when a key is
+ *                    present). Use `http://127.0.0.1:8081/v1` for the
+ *                    local `fw-openai-sts` shim, or any
+ *                    OpenAI-compatible gateway URL.
+ *    - `api_key`   → overrides `OPENAI_API_KEY` (and the
+ *                    `~/.pi/agent/auth.json` fallback). Useful for
+ *                    key-per-profile routing when one `telegram.json`
+ *                    is shared across multiple bot profiles.
+ *
+ *  This makes the local-vs-cloud switch a one-line edit in
+ *  `telegram.json` instead of an env-var dance, which matches the
+ *  rest of the bridge's config conventions. Env vars still win for
+ *  one-off overrides (CI, container runs).
+ *
+ *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
+ *  `pi-telegram-echo`'s `getAgentDir()` pattern). */
+function readTelegramJsonSttConfig(): { baseUrl?: string; apiKey?: string } {
+	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const configPath = join(dir, "telegram.json");
+	if (!existsSync(configPath)) return {};
+	try {
+		const raw = readFileSync(configPath, "utf8");
+		const parsed = JSON.parse(raw) as {
+			extensions?: Record<string, { base_url?: unknown; api_key?: unknown } | undefined>;
+		};
+		const ext = parsed.extensions?.["pi-openai-stt"];
+		if (!ext || typeof ext !== "object") return {};
+		return {
+			baseUrl: typeof ext.base_url === "string" && ext.base_url ? ext.base_url : undefined,
+			apiKey: typeof ext.api_key === "string" && ext.api_key ? ext.api_key : undefined,
+		};
+	} catch {
+		// ignore parse errors; env vars are the next fallback
+		return {};
 	}
 }
 
@@ -123,20 +192,32 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 		throw new OpenAiSttError("openai-stt: missing inputPath", 1);
 	}
 
-	// API key resolution: explicit arg > env var > auth.json fallback.
-	// The auth.json fallback is for the on-host path — operators who
-	// already have the key in `auth.json` (the LLM provider reads
-	// the same file) don't need to set a separate env var for STT.
-	// `firstNonEmpty` treats an empty env var as unset so unsets
-	// fall through to the next option.
-	const apiKey = firstNonEmpty(args.apiKey, process.env.OPENAI_API_KEY, readOpenAiKeyFromAuthJson());
+	// API key resolution: explicit arg > telegram.json > env var >
+	// auth.json fallback. The auth.json fallback is for the on-host
+	// path — operators who already have the key in `auth.json` (the
+	// LLM provider reads the same file) don't need to set a separate
+	// env var for STT. `telegram.json` is the bridge's canonical
+	// config file, so the operator can pin the key per profile
+	// without touching the environment. `firstNonEmpty` treats an
+	// empty string as unset so unsets fall through to the next
+	// option.
+	const telegramSttConfig = readTelegramJsonSttConfig();
+	const apiKey = firstNonEmpty(
+		args.apiKey,
+		telegramSttConfig.apiKey,
+		process.env.OPENAI_API_KEY,
+		readOpenAiKeyFromAuthJson(),
+	);
 
-	// Smart default: if the operator has set OPENAI_API_KEY (or has
-	// the key in auth.json), assume they want OpenAI's actual API.
-	// Otherwise, assume they want the local `fw-openai-sts` shim.
-	// Both can be overridden with OPENAI_STT_BASE_URL.
+	// baseUrl resolution: explicit arg > telegram.json > env var >
+	// smart default. The smart default picks OpenAI's actual API
+	// when a key is resolvable (any source) and the local
+	// `fw-openai-sts` shim otherwise. `telegram.json` is the
+	// recommended way to switch between local and cloud — set
+	// `extensions["pi-openai-stt"].base_url` to the gateway URL.
 	const baseUrl = firstNonEmpty(
 		args.baseUrl,
+		telegramSttConfig.baseUrl,
 		process.env.OPENAI_STT_BASE_URL,
 		apiKey ? OPENAI_API_BASE_URL : LOCAL_SHIM_BASE_URL,
 	)!.replace(/\/$/, "");

@@ -1,7 +1,7 @@
 {
   "name": "pi-openai-stt",
-  "version": "0.1.0",
-  "description": "STT provider for any OpenAI-compatible API gateway. Implements the SttProvider contract from pi-telegram-echo; registers with id 'pi-openai-stt'. Talks POST /v1/audio/transcriptions. Env vars: OPENAI_STT_BASE_URL (smart default: OpenAI API if OPENAI_API_KEY is set, else the local fw-openai-sts shim at http://127.0.0.1:8081/v1), OPENAI_API_KEY (optional), OPENAI_STT_MODEL (default whisper-1), PI_TELEGRAM_LANG (default yue).",
+  "version": "0.1.1",
+  "description": "STT provider for any OpenAI-compatible API gateway. Implements the SttProvider contract from pi-telegram-echo; registers with id 'pi-openai-stt'. Talks POST /v1/audio/transcriptions. Config (first non-empty wins): explicit OpenAiSttArgs.baseUrl/.apiKey > extensions['pi-openai-stt'].base_url/.api_key in telegram.json > OPENAI_STT_BASE_URL/OPENAI_API_KEY env vars > ~/.pi/agent/auth.json (api_key only) > smart default (OpenAI's API if a key is resolvable, else the local fw-openai-sts shim at http://127.0.0.1:8081/v1). Also: OPENAI_STT_MODEL (default whisper-1), PI_TELEGRAM_LANG (default yue).",
   "type": "module",
   "license": "MIT",
   "main": "./index.ts",
