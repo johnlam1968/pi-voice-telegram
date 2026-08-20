@@ -903,6 +903,47 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 3. **Type consistency:** all modifications are to files that already exist (`synthesis-provider.ts`, `echo.ts`, `index.ts`, `config.ts`, `pi-voice-telegram.schema.json`). The new file `docs/superpowers/plans/2026-08-19-voice-section.md` is a Phase C artifact produced by Task C2, not a forward reference. The `registerTelegramSection` import is from `@llblab/pi-telegram/sections` per the upstream `voice.md`. ✅
 4. **Dependency on bridge version (revised 2026-08-19):** Phase B (Task B1) and Phase C (Task C1) were originally flagged as needing `@llblab/pi-telegram@0.36.5+`. **Verified not needed**: `getVoicePromptContribution` is in `node_modules/@llblab/pi-telegram/lib/voice.ts:64` of the installed 0.28.0, and `registerTelegramSection` is in `node_modules/@llblab/pi-telegram/lib/sections.ts:284` of the installed 0.28.0. Both APIs are present in 0.28.0; no cluster upgrade is required for Phases A, B, or C. The original concern was that the 8 new files added between 0.29.0 and 0.36.5 might be where the new APIs live — they are not; both APIs were present in 0.28.0 already.
 
+---
+
+## v0.19.0+ — Split pi-voice-telegram into 3 atomic extensions (revised again, 2026-08-19)
+
+**Status:** PLANNED (replaces v0.18.0 Phase C — the monolithic section migration is superseded by the split).
+
+**Why (user-driven architectural rethink, 2026-08-19):**
+- pi-telegram already does most of the voice plumbing (transcription provider hook, synthesis provider hook, runtime event log, settings UI rendering). The current `pi-voice-telegram@0.17.1` is doing too much — it bundles 6 TS files, 7 LLM tools, an STT provider, a TTS provider, a 327-voice catalog, an inbound echo, and schema-driven config into one package.
+- Splitting into 3 atomic extensions, each with one clear job, follows the pi-telegram "small, composable extensions" model and is easier to maintain, test, and version.
+- The user wants the agent to be able to change any `telegram.json` key (not just voice-specific) — that capability is a separate, general concern, deserving its own package.
+
+**Three extensions, each with one job:**
+
+| # | Extension | Responsibility | LOC est. | Persisted key in `telegram.json` | Section? |
+|---|---|---|---|---|---|
+| 1 | **`pi-telegram-echo`** | Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages. Registers as a STT provider (`registerTelegramVoiceTranscriptionProvider`) so any operator with a working STT can get the feature. The STT call itself is a configurable command (default: empty — operator configures). ~150 lines. | `extensions["pi-telegram-echo"]` (`echoEnabled`, `stt.command`) | ✅ yes, with `echoEnabled` toggle + `stt.command` presets |
+| 2 | **`pi-telegram-tts-minimax`** | TTS synthesis provider for MiniMax. mm-tts → ffmpeg → OGG/Opus. ~250 lines. | `extensions["pi-telegram-tts-minimax"]` (`voice`, `lang`, `model`, `verify`, `timeoutMs`, etc.) | ✅ yes, with TTS controls |
+| 3 | **`pi-telegram-settings`** | LLM-callable tools for editing any `telegram.json` key. Not voice-specific — the user explicitly said "including pi-telegram's other settings". ~300 lines. | n/a (it edits `telegram.json` directly) | ❌ no (it's a tool surface, not a UI surface) |
+
+**Why this is better than the current monolithic `pi-voice-telegram`:**
+- Each extension has one clear job (single-responsibility).
+- Each can be installed/uninstalled independently. An operator who only wants the echo doesn't pull in MiniMax TTS.
+- Settings are namespaced per extension in `telegram.json` under `extensions["..."]` — no cross-extension pollution.
+- pi-telegram already does most of the voice plumbing (transcription provider hook, synthesis provider hook, runtime event log, settings UI rendering). The companion code is small and follows the same conventions.
+- The settings-management extension can be reused by future non-voice extensions ("an extension for editing the cluster's other settings" is a general capability).
+
+**On the STT path (user feedback 2026-08-19):** pi-telegram has no built-in whisper-server STT. The operator can either (a) configure `telegram.json.inboundHandlers` with a command template (the "stronger" path) or (b) install an extension that registers a STT provider (the "fallback" path). The `pi-telegram-echo` extension uses path (b) by default — the operator can also use path (a) and the extension is bypassed. The STT call inside the extension is itself a **configurable command** (e.g., `["curl", "-s", "-X", "POST", "-F", "file=@{file}", "http://127.0.0.1:8080/inference"]` for whisper-server, or any other STT endpoint). The extension is not hardcoded to whisper-server — it's a thin wrapper that adds the echo side-effect to whatever STT the operator has configured.
+
+**Migration from the current `pi-voice-telegram@0.17.1`:**
+- The current code splits across 3 new packages.
+- The legacy `pi-voice-telegram.json` is auto-migrated into the 3 new `extensions["..."]` blocks in `telegram.json` (one-time, at `session_start`).
+- After the migration, the old `pi-voice-telegram` package is removed from `pi-cluster/docker-entrypoint.sh` `REQUIRED_PACKAGES`.
+- The 3 new packages are added to `REQUIRED_PACKAGES`.
+
+**Layout (this session):** the 3 new packages live under `extensions/` in the current `pi-voice-telegram` repo:
+- `extensions/pi-telegram-echo/` (full implementation in this session)
+- `extensions/pi-telegram-tts-minimax/` (scaffolded stub in this session, full impl deferred)
+- `extensions/pi-telegram-settings/` (scaffolded stub in this session, full impl deferred)
+- Each gets its own `package.json` and a minimal `index.ts`. The full code for echo lives in this session's commit; the other 2 get a working `package.json` + a stub `index.ts` (just the entry-point signature) so they can be loaded by the agent and exercised end-to-end later.
+- On-host testing: the user said "going forward, we should use the on-host pi-coding-agent as a test subject. We can implement docker container later." So the docker cluster is secondary; on-host validation is the path.
+
 ## Migration notes (v0.17.0+ → ...)
 
 - **v0.16.12 → v0.17.0:** no breaking changes. Phase A is docstring + one runtime event + a verification step (and possibly a chat-ID fix if Task A3 finds a mismatch).
