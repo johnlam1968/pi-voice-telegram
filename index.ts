@@ -2,6 +2,16 @@
  * pi-voice-telegram — companion extension for the Pi coding agent + a
  * Telegram bridge (default: @llblab/pi-telegram).
  *
+ * v0.17.0: provider-responsibility fixes per the 2026-08-19 upstream
+ *         convention audit. (1) Drop the false `rate` claim from the
+ *         layered-defaults docstring in synthesis-provider.ts (the
+ *         code never read it). (2) Log a runtime event on silent
+ *         caption truncation at 1024 chars — previously no signal.
+ *         (3) Mirror the bridge's `voice-`/`audio-` filename
+ *         contract in echo.ts so the 🎙️ echo isn't silently dropped
+ *         for audio messages. No behavior change for unchanged inputs.
+ *         Closes the v0.16.7+ candidates list in PLAN.md.
+ *
  * v0.16.7 REDESIGN of the inbound voice path: the previous design had
  * two handlers (an update handler that downloaded + transcribed +
  * cached, and an inbound handler that did its own on-demand transcribe

@@ -664,3 +664,215 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 - **v0.16.10** — namespace rename from `tools` to `llm_tools`. The internal field names are unchanged (`llm_tools.exposed` is the master, `llm_tools.tts.enabled` / `llm_tools.tts.name` and `llm_tools.stt.enabled` / `llm_tools.stt.name` are the sub-tool switches). The `llm_tools.` prefix makes it explicit that these switches gate the LLM tool surface (registration of the 7 LLM-callable tools) — not the TTS/STT extension features, which run unconditionally; only their LLM-tool wrappers (`synthesize_voice` / `transcribe_audio`) are gated here. The TTS provider keeps synthesizing every voice reply (`voice.replyMode: mirror`); the STT client keeps transcribing every voice message for the echo; the user always hears the agent's voice. **Breaking**: any v0.16.9 config with `tools.*` will be treated as if the master switch is off (no LLM tools registered). Migration: rename `tools` to `llm_tools` in the config file. Changes: `config.ts` type definition (`tools?` → `llm_tools?`, all internal fields preserved); `index.ts` runtime check (`cfg.tools?.exposed === true` → `cfg.llm_tools?.exposed === true`); `pi-voice-telegram.schema.json` (top-level property renamed, description includes v0.16.10 migration note); `examples/pi-voice-telegram.json` (top-level key renamed, `_hint` bumped to v0.16.10+); `tools.ts` (config_read / config_write / schema / list_voices descriptions reference the new namespace); `README.md` (knobs table + descriptive prose in 4 places); `docs/CODE-FLOW.md` (gitignored, kept in sync).
 - **v0.16.11** — remove `examples/pi-voice-telegram.json`. The example file was a hand-maintained duplicate of `DEFAULT_CONFIG` (the auto-seed source of truth), 95% identical with only the master switch and a couple of `true` overrides differing. The "byte-equal" maintenance lesson in PLAN.md (added at v0.8.0) was supposed to prevent drift, but the file still drifted three times in this session alone (v0.16.8 verify default, v0.16.9 tools.exposed rename, v0.16.10 llm_tools namespace). The convention wasn't working. The auto-seed on first start produces a strictly better source of truth (it's what the extension itself uses) and is hot-reloadable, so there's no need for a separate copy-paste-ready file. The file is also removed from the npm package's `files` array. Changes: `package.json` drops `"examples/"`; `config.ts:234-242` removes item 5 from the MAINTENANCE checklist; the docstring at the end of the checklist notes the v0.16.11 removal; `_hint` in `DEFAULT_CONFIG` bumped to v0.16.11+; `README.md` line 273 (the "see `examples/...`" reference) replaced with a one-liner about flipping the master switch after the auto-seed. Historical PLAN.md references to the example file (v0.5.0 through v0.16.10) are preserved as-is — they describe what was true at past versions.
 - **v0.16.12** — per-tool gates under `llm_tools.tools.<name>`. Each of the 7 LLM tools can be individually enabled/disabled, replacing the v0.16.10 `llm_tools.tts.enabled` and `llm_tools.stt.enabled` shortcuts. The reasoning: every tool the LLM sees is added to its prompt, and per-tool gates let operators trim the surface to save tokens + reduce the LLM's decision space (agents get confused by too many tool choices). **All 7 tools default to `true`** (back-compat with v0.16.10's "everything on when exposed: true" behavior). The `tts.name` and `stt.name` sub-objects stay as name overrides only (the `enabled` fields are gone). **Breaking** for any v0.16.10 config that had `llm_tools.tts.enabled: false` or `llm_tools.stt.enabled: false` — the old fields are silently ignored in v0.16.12 (the per-tool gate defaults to `true`). Migration: `llm_tools.tts.enabled: false` → `llm_tools.tools.synthesize_voice: false` (and similarly for STT). Changes: `config.ts` type definition adds `tools?: { [name]: boolean }`; the `tts.enabled` and `stt.enabled` fields are removed from the type; `DEFAULT_CONFIG.llm_tools.tools` lists all 7 with `true`; `_hint` bumped to v0.16.12+; `index.ts` runtime replaces the 2 sub-gate checks with 7 per-tool checks (via a `toolEnabled(name)` helper); `pi-voice-telegram.schema.json` adds the `tools` property with full descriptions for each of the 7 tool gates and a v0.16.12 migration note; `examples/pi-voice-telegram.json` was already deleted in v0.16.11; `README.md` knobs table and the LLM tools section both reflect the per-tool design; `docs/CODE-FLOW.md` (gitignored) kept in sync.
+- **v0.17.0** — provider-responsibility fixes per the 2026-08-19 upstream convention audit. (1) Drop the false `rate` claim from the layered-defaults docstring in `synthesis-provider.ts` (the code never read it). (2) Log a runtime event on silent caption truncation at 1024 chars — previously no signal. (3) Mirror the bridge's `voice-`/`audio-` filename contract in `echo.ts` (audio messages were silently dropping the `🎙️` echo because the stash always used `voice-` regardless of the message kind; the bridge uses `audio-` for `message.audio`). No schema or behavior change for unchanged inputs. The v0.16.7+ candidate list (PLAN.md:469-573) is closed by this release. The full upstream-alignment plan (Phase A / B / C) is captured in the §"v0.17.0+ — Align with upstream pi-telegram conventions" section below; Phase B (`getVoicePromptContribution`) and Phase C (`registerTelegramSection`) ship as v0.17.1 and v0.18.0 respectively and require the cluster to be on `@llblab/pi-telegram@0.36.5+`. Changes: `synthesis-provider.ts` (1-2 lines of docstring, 11 lines of runtime-event logging at the truncation site); `echo.ts` (38 lines added, 14 removed — the `mimeToExtension` and `fileNameFor` helpers replaced with a `guessExtensionFromMime` mirror of the bridge's `lib/media.ts:185`); `index.ts` (top-of-file changelog entry); `config.ts` (bumped `_hint` in `DEFAULT_CONFIG` to `v0.17.0+`); `package.json` (version bump); `PLAN.md` (this entry + the v0.17.0+ plan section).
+
+---
+
+## v0.17.0+ — Align with upstream pi-telegram conventions
+
+**Status:** PLANNED (not yet shipped). Three independently-releasable phases, ordered by risk: low → medium → high.
+
+**Why:** A 2026-08-19 convention audit against the upstream's [`docs/voice.md`](https://github.com/llblab/pi-telegram/blob/main/docs/voice.md) found ~85% adherence to the runtime contract. The bridge-facing API (provider registration, return shapes, file format, runtime events, session lifecycle, stable IDs, disposers) is used correctly and idiomatically. Three gaps, in priority order:
+
+1. **No `registerTelegramSection`** — the upstream's recommended discoverability surface for provider settings is missing. Operator-facing knobs (voice, lang, model, verify, echo, STT, llm_tools) live in a hidden hand-edited JSON file or env vars instead of the bridge's Telegram UI.
+2. **No `getVoicePromptContribution`** — the upstream-provided seam for shaping voice-tagged prompts (e.g. "reply only with the spoken text, no markdown") is unused.
+3. **The v0.16.7+ candidate list** (the 2026-08-18 self-critical review) — `rate` layering bug at `synthesis-provider.ts:137`, silent caption truncation at 1024 chars, chat-ID lookup fragility in `echo.ts:163-165`, no retry on transient 5xx, no STT cache, redundant telegram.json re-reads.
+
+**Architecture:** three phases, each shippable as its own release. Each phase has its own PR, its own version bump, its own release/cluster-upgrade pass per PLAN.md:426-436.
+
+- **Phase A (v0.17.0):** recommendation 3 items that are low-risk provider-responsibility fixes. Doc-vs-code drift fix + one runtime event + one verification step (with a possible fix). No behavior change for unchanged inputs.
+- **Phase B (v0.17.1):** recommendation 2 — `getVoicePromptContribution` implementation. Pure addition, no behavior change.
+- **Phase C (v0.18.0):** recommendation 1 — `registerTelegramSection` migration. The biggest change — moves the 7 settings from a hidden JSON file to the bridge's Telegram UI. Backward-compatible: existing `pi-voice-telegram.json` files are still read as a fallback, with the Telegram UI as the new primary surface.
+
+**Tech Stack:** existing ESM TypeScript (jiti-loaded, no build), JSON Schema (existing), the bridge's public API (`@llblab/pi-telegram/voice`, `/sections`, `/outbound`), `@sinclair/typebox` (existing peer dep).
+
+**Global constraints (apply to every task):** follow existing code style (2-space indent, single quotes, trailing commas); schema-driven config; hot-reload on every reconfigure; each release preserves the previous release's effective behavior for unchanged configs; new features are opt-in; Conventional Commits for commit messages; update `package.json` version, `_hint` in `DEFAULT_CONFIG`, top-of-file changelog in `index.ts`, and the File history bullet when a phase ships.
+
+### Phase A — v0.17.0: Provider-responsibility fixes
+
+#### Task A1: Reconcile the `rate` layering docstring
+
+**Files:**
+- Modify: `synthesis-provider.ts:1-30` (top-of-file JSDoc)
+
+**Context:** the JSDoc at the top of `synthesis-provider.ts` claims the layered default resolution includes `telegram.json.outboundHandlers[voice].defaults.rate`, but the code at `synthesis-provider.ts:137` resolves `speed` as `Number(options?.rate ?? 1.0)` — the `defaults.rate` field is read off the file but never used. An operator who sets `defaults.rate = 1.5` gets 1.0. The self-critical review at PLAN.md:476-488 picked the docstring fix as the safer one — don't add `defaults.rate` to the resolution until a real use case is demonstrated.
+
+- [ ] **Step 1:** Read the current docstring at the top of `synthesis-provider.ts` (lines 1-30).
+- [ ] **Step 2:** Remove the `rate` claim from the layered-defaults list in the JSDoc. Verify the rest of the docstring still makes sense.
+- [ ] **Step 3:** Run `bash scripts/live-test.sh`. Should still pass.
+- [ ] **Step 4:** Commit: `git commit -am "fix(synthesis): drop rate from layered-default docstring"`.
+
+#### Task A2: Record a runtime event for silent caption truncation
+
+**Files:**
+- Modify: `synthesis-provider.ts` (around line 182, the truncation site)
+
+**Context:** when `text.length > 1024` and `voice.sendTranscript === true`, the caption is clipped to 1023 chars + `…` while the audio is the full text. The user sees a truncated caption but hears the full narration. The truncation is silent — no runtime event, so the operator has no signal. Fix: record `recordTelegramRuntimeEvent("pi-voice-telegram/tts", null, { phase: "caption-truncated", textLength, captionLength: 1024 })` when the truncation happens.
+
+- [ ] **Step 1:** Locate the truncation site in `synthesis-provider.ts` (the path where `getTelegramVoiceSendTranscript` returns true and the text is sliced to 1024 chars).
+- [ ] **Step 2:** Add a `recordTelegramRuntimeEvent` call (the import is already at `synthesis-provider.ts:40`) when the truncation happens. Include `textLength` and `captionLength: 1024` in the event details.
+- [ ] **Step 3:** Run `bash scripts/live-test.sh`. Should still pass.
+- [ ] **Step 4:** Manual probe: send a long text (>1024 chars) through the synthesis path; tail `~/.pi/agent/tmp/telegram/logs.jsonl` for the new `caption-truncated` event.
+- [ ] **Step 5:** Commit: `git commit -am "feat(synthesis): log runtime event on caption truncation"`.
+
+#### Task A3: Verify the chat-ID lookup against the bridge's contract
+
+**Files:**
+- Investigate: `node_modules/@llblab/pi-telegram/lib/voice.ts` (or wherever `transcribeTelegramVoiceFileWithProviders` is defined; 0.28.0 path)
+- Possibly modify: `echo.ts:160-170`
+
+**Context:** the update handler stashes the chat ID by `voice-<message_id>.<ext>` (built from `fileNameFor(msg.message_id, ext)` at `echo.ts:163-165`). The provider looks it up by `file.fileName` (the name the bridge actually uses). If the bridge's naming convention differs from the deterministic name the update handler assumed, the echo is silently dropped (the `if (chatId)` block at `echo.ts:269` is skipped). This is the v0.16.7 silent-failure mode that replaced the v0.16.6 empty-transcript mode (per PLAN.md:527-543).
+
+- [ ] **Step 1:** Read the bridge's `transcribeTelegramVoiceFileWithProviders` (or equivalent) in `node_modules/@llblab/pi-telegram/lib/voice.ts` to see what `fileName` it passes to the provider.
+- [ ] **Step 2:** Compare with `fileNameFor` in `echo.ts:160-170`. Document the match/mismatch as a comment in this PLAN section.
+- [ ] **Step 3a (names match):** no code change. Add a comment in `echo.ts` explaining the verified contract (e.g. "the bridge's `transcribeTelegramVoiceFileWithProviders` passes the same `fileNameFor(msg.message_id, ext)` name the update handler stashes by — verified against `@llblab/pi-telegram@0.28.0` `lib/voice.ts:NNNN`").
+- [ ] **Step 3b (names don't match):** fix the chat-ID lookup. The likely fix is to thread the chat ID through the bridge's options object (if the API supports it) or to look up by `message_id` instead of by `fileName`. Document the chosen approach in this PLAN section.
+- [ ] **Step 4:** Run `bash scripts/live-test.sh`. If a fix was made, also send a real voice message via Telegram and verify the `🎙️` echo arrives.
+- [ ] **Step 5:** Commit: either `git commit -am "docs(echo): document verified chat-id-by-filename contract"` (3a) or the appropriate fix commit (3b).
+
+#### Phase A ship checklist
+
+- [ ] All three tasks (A1, A2, A3) committed on a feature branch and merged to `master`
+- [ ] `scripts/live-test.sh` passes against the cluster
+- [ ] `_hint` in `DEFAULT_CONFIG` (`config.ts`) bumped to `v0.17.0+`
+- [ ] Top-of-file changelog comment in `index.ts` gets a `v0.17.0:` section
+- [ ] `package.json` version bumped to `0.17.0`
+- [ ] `npm publish` + cluster upgrade per PLAN.md:426-436
+- [ ] File history bullet appended to this PLAN.md's §"File history (high level)"
+- [ ] Tag the release: `git tag -a v0.17.0 -m "..."`
+
+### Phase B — v0.17.1: `getVoicePromptContribution`
+
+#### Task B1: Check the bridge's exact API for the contribution seam
+
+**Files:**
+- Investigate: `node_modules/@llblab/pi-telegram/lib/voice.ts` (TSDoc on the synthesis-provider factory)
+- Reference: `docs/voice.md` (the upstream contract)
+
+**Context:** `voice.md` says providers can implement `getVoicePromptContribution(view)` to inject voice-specific instructions into voice-tagged prompts. The bridge "appends the first non-empty provider contribution when `mirror` or `always` mode tags the turn." Need the exact signature (the `view` type, the return type, the seam name) before implementing.
+
+- [ ] **Step 1:** Read the TSDoc on the synthesis-provider factory in `node_modules/@llblab/pi-telegram/lib/voice.ts`. Search for `getVoicePromptContribution`, `promptContribution`, or similar.
+- [ ] **Step 2:** Verify the contract against `docs/voice.md`. Document the exact signature (import path, parameter type, return type) as a comment in this PLAN section.
+- [ ] **Step 3:** If the API is missing in the installed 0.28.0 but present in 0.36.5 (likely), note that Phase B depends on the cluster being upgraded to 0.36.5+ first. Either upgrade before Phase B, or defer Phase B until after the upgrade.
+
+#### Task B2: Implement the contribution in `synthesis-provider.ts`
+
+**Files:**
+- Modify: `synthesis-provider.ts` (add the contribution function, wire it to the provider factory)
+
+**Context:** pi-voice-telegram currently has no contribution. The default behavior (LLM uses markdown, includes code blocks, etc.) is wrong for spoken voice replies. The contribution should nudge the LLM to use spoken-style formatting.
+
+- [ ] **Step 1:** Add a `getVoicePromptContribution(view)` function in `synthesis-provider.ts`. Initial content: a short string like *"Reply in spoken style — no markdown, no code blocks, no bullet lists, no URLs. Use natural sentences. Keep it under 200 words unless the user asked for detail."* (Final wording tuned against a real test.)
+- [ ] **Step 2:** Wire the function into the synthesis provider factory (wherever `createMmTtsSynthesisProvider` accepts the contribution — likely a second-arg options object).
+- [ ] **Step 3:** Run `bash scripts/live-test.sh`. Should still pass.
+- [ ] **Step 4:** Manual probe: in `mirror` mode, send a voice message that asks the agent a question that would normally produce markdown. Verify the voice reply is in spoken style (no markdown audio artifacts).
+- [ ] **Step 5:** Commit: `git commit -am "feat(synthesis): add getVoicePromptContribution for voice-tagged prompts"`.
+
+#### Phase B ship checklist
+
+- [ ] Tasks B1-B2 committed
+- [ ] `_hint` bumped to `v0.17.1+`
+- [ ] Top-of-file changelog in `index.ts` gets a `v0.17.1:` section
+- [ ] `package.json` version bumped to `0.17.1`
+- [ ] File history bullet appended
+- [ ] Tag the release: `git tag -a v0.17.1 -m "..."`
+- [ ] Cluster upgrade per PLAN.md:426-436
+
+### Phase C — v0.18.0: Voice Extension Section
+
+**Goal:** move the 7+ provider settings from a hidden JSON file (or env vars) to the bridge's Telegram UI, per `voice.md`'s `registerTelegramSection` recommendation. The companion's settings become discoverable in `/telegram-settings` like the bridge's own settings. The `pi-voice-telegram.json` file becomes a backward-compat fallback and (eventually) documentation only.
+
+#### Task C1: Read the bridge's section API contract
+
+**Files:**
+- Investigate: `https://github.com/llblab/pi-telegram/blob/main/docs/sections.md`
+- Investigate: `node_modules/@llblab/pi-telegram/lib/sections.ts` (or wherever `registerTelegramSection` is defined)
+- Investigate: `node_modules/@llblab/pi-telegram/docs/` for the sections-related TSDoc
+
+**Context:** need the exact signature of `registerTelegramSection`, the section shape (what kinds of controls are supported: text input, dropdown, toggle, etc.), and the section's persistence model (where the values are stored when the operator changes them — `telegram.json` under a known key? a separate file? in the bridge's own state?).
+
+- [ ] **Step 1:** Read `docs/sections.md` from the upstream.
+- [ ] **Step 2:** Read the TSDoc on `registerTelegramSection` in the installed bridge package.
+- [ ] **Step 3:** Document the API in this PLAN section as a comment block — import path, registration function signature, section shape, persistence model.
+- [ ] **Step 4:** If the section's persistence model is "the bridge stores the values in `telegram.json`", then `loadCompanionConfig` in `config.ts` needs to read from `telegram.json` (under the section's key) instead of from `pi-voice-telegram.json`. If the persistence model is "the section gets a callback to read/write wherever it wants" (e.g. `onValueChange: (values) => { ... }`), the migration is simpler. Document the chosen approach.
+- [ ] **Step 5:** If the API is missing in 0.28.0 but present in 0.36.5, note the dependency on the cluster upgrade (same as Phase B).
+
+#### Task C2: Design the section shape
+
+**Files:**
+- Modify: `pi-voice-telegram.schema.json` (extend the schema with the section's shape, or create a section-specific schema)
+- New: `docs/superpowers/plans/2026-08-19-voice-section.md` (the detailed Phase C design doc, after C1 clarifies the API)
+
+**Context:** the upstream says provider settings (voice, language, speech style, transcript behavior, STT/TTS enablement) belong in the section. pi-voice-telegram has all of these. The section needs a clean shape that maps 1:1 to the existing settings, with logical grouping.
+
+- [ ] **Step 1:** Map each existing setting to a section control (using the API surface documented in C1):
+  - `tts.voice` — text input + a "list voices" affordance (calls `pi_voice_telegram_list_voices`)
+  - `tts.lang` — text input or dropdown
+  - `tts.model` — text input or dropdown
+  - `tts.verifyAfterSynthesize` — toggle
+  - `inbound.echoEnabled` — toggle
+  - `stt.lang` — text input
+  - `stt.baseUrl` — text input
+  - `llm_tools.exposed` — toggle (master)
+  - `llm_tools.tools.<name>` — 7 toggles
+- [ ] **Step 2:** Decide grouping: four groups — **TTS** (voice, lang, model, verify), **STT** (lang, baseUrl), **Inbound echo** (echoEnabled), **LLM tools** (exposed, the 7 tool gates).
+- [ ] **Step 3:** Write the section shape into the schema. If the section uses the same `pi-voice-telegram.schema.json` schema (most likely), extend it. Otherwise create a section-specific schema file.
+- [ ] **Step 4:** **Get user sign-off on the section shape before implementing** — present the design in the chat and wait for approval.
+
+#### Task C3: Implement the section registration in `index.ts`
+
+**Files:**
+- Modify: `index.ts` (add `registerTelegramSection` call in `reconfigure()`)
+- Modify: `config.ts` (read from the section's stored values first, fall back to `pi-voice-telegram.json` for backward compat)
+- Modify: `pi-voice-telegram.schema.json` (extend the description and `_hint` to mention the new primary surface)
+
+- [ ] **Step 1:** Import `registerTelegramSection` from `@llblab/pi-telegram/sections`.
+- [ ] **Step 2:** Build the section shape from the resolved config (using the Task C2 design).
+- [ ] **Step 3:** Call `registerTelegramSection(...)` in `reconfigure()` and add the disposer to the `disposers` array (the existing hot-reload pattern at `index.ts:248-249`).
+- [ ] **Step 4:** Update `loadCompanionConfig` in `config.ts` to read the section's stored values first, then fall back to `pi-voice-telegram.json` (so existing deployments don't break). Decide what happens when both are present: section wins (recommended), with a runtime event warning the operator that the JSON file is being ignored.
+- [ ] **Step 5:** Update the docstring at `config.ts:282` to point operators to the Telegram UI as the primary surface, with the JSON as a documented fallback. The current text "TTS/STT settings (tts.lang, tts.voice, tts.model, stt.lang, stt.baseUrl, etc.) live in THIS file" becomes "TTS/STT settings now live in the Telegram Settings UI (Voice Extension Section). This file is a fallback for deployments that haven't yet adopted the UI."
+- [ ] **Step 6:** Update `pi-voice-telegram.schema.json`'s top-level description to reflect the new primary surface.
+- [ ] **Step 7:** Run `bash scripts/live-test.sh`. Should still pass.
+- [ ] **Step 8:** Manual probe: open `/telegram-settings` in Telegram, navigate to the new "Voice (pi-voice-telegram)" section, change `tts.voice`, save, verify the change takes effect on the next synthesis.
+- [ ] **Step 9:** Commit: `git commit -am "feat: register Voice Extension Section for provider settings"`.
+
+#### Task C4: Update docs and docstrings
+
+**Files:**
+- Modify: `README.md` (Settings section, knobs table)
+- Modify: `docs/DESIGN-INTENT.md` (§6 "Self-describing config + LLM-friendly ergonomics" — note the new UI surface)
+- Modify: `docs/CODE-FLOW.md` (gitignored; keep in sync)
+
+- [ ] **Step 1:** Update the README's Settings section to point at the Telegram UI as the primary surface, with the JSON as a fallback.
+- [ ] **Step 2:** Update the README's knobs table to note the UI surface for each setting (one column or footnote).
+- [ ] **Step 3:** Update `docs/DESIGN-INTENT.md` §6 to note the section.
+- [ ] **Step 4:** Update `docs/CODE-FLOW.md` to reflect the new config flow (section first, JSON fallback).
+- [ ] **Step 5:** Commit: `git commit -am "docs: point operators at the new Voice Extension Section"`.
+
+#### Phase C ship checklist
+
+- [ ] Tasks C1-C4 committed on a feature branch and merged to `master`
+- [ ] Backward compat: existing `pi-voice-telegram.json` files are still read as a fallback (with a deprecation warning if both are present)
+- [ ] Live test passes
+- [ ] Manual UI probe passes (set a value in the Telegram UI, verify the change takes effect on the next synthesis)
+- [ ] `_hint` bumped to `v0.18.0+`
+- [ ] Top-of-file changelog in `index.ts` gets a `v0.18.0:` section
+- [ ] `package.json` version bumped to `0.18.0`
+- [ ] Migration note added to PLAN.md §"Migration notes"
+- [ ] File history bullet appended
+- [ ] Tag the release: `git tag -a v0.18.0 -m "..."`
+- [ ] Cluster upgrade per PLAN.md:426-436 (and ensure the cluster is on `@llblab/pi-telegram@0.36.5+` for the section API)
+
+## Self-review
+
+1. **Spec coverage:** all three recommendations are covered. Recommendation 1 → Phase C; Recommendation 2 → Phase B; Recommendation 3 → Phase A (with the v0.16.7+ candidates explicitly listed). ✅
+2. **Placeholder scan:** no TBDs. Task A3 has a real "3a or 3b" branch (verification first, then conditional fix) — not a placeholder. Task C1 says "document the API" — the implementer must read the bridge's docs before proceeding, this is a real prerequisite step. Task C2 step 4 has an explicit user sign-off checkpoint. ✅
+3. **Type consistency:** all modifications are to files that already exist (`synthesis-provider.ts`, `echo.ts`, `index.ts`, `config.ts`, `pi-voice-telegram.schema.json`). The new file `docs/superpowers/plans/2026-08-19-voice-section.md` is a Phase C artifact produced by Task C2, not a forward reference. The `registerTelegramSection` import is from `@llblab/pi-telegram/sections` per the upstream `voice.md`. ✅
+4. **Dependency on bridge version:** Phase B (Task B1) and Phase C (Task C1) both require the cluster to be on a bridge version that exposes the new APIs. Per the 2026-08-19 version check, `journal.ts` is byte-identical between 0.28.0 and 0.36.5, but the *new* APIs (sections, prompt contribution) are in the 8 new files added in 0.29.0–0.36.5. **The cluster upgrade to 0.36.5+ must happen before or alongside Phase B/C.** This is called out in B1 step 3 and C1 step 5.
+
+## Migration notes (v0.17.0+ → ...)
+
+- **v0.16.12 → v0.17.0:** no breaking changes. Phase A is docstring + one runtime event + a verification step (and possibly a chat-ID fix if Task A3 finds a mismatch).
+- **v0.17.0 → v0.17.1:** no breaking changes. Phase B is a pure addition.
+- **v0.17.1 → v0.18.0:** **the cluster must be on `@llblab/pi-telegram@0.36.5+`** for the new APIs to register. Operators with existing `pi-voice-telegram.json` files do nothing — the file is still read as a fallback. Operators who prefer the new UI surface will see the section in `/telegram-settings`; the section's values take precedence over the JSON file. The auto-seed behavior is unchanged (still writes `pi-voice-telegram.json` on first start if missing); whether to keep the auto-seed after the section becomes the primary surface is a Phase C implementation decision (defer to Task C2 step 4 sign-off).
+- **Cluster upgrade dependency:** the plan depends on `@llblab/pi-telegram@0.36.5+` being available in the cluster's `REQUIRED_PACKAGES` (currently `0.28.0` per `pi-cluster/docker-entrypoint.sh`). The cluster upgrade is independent of this plan but must happen before Phase B and Phase C ship — see PLAN.md:426-436 for the upgrade recipe.
