@@ -1,6 +1,6 @@
 {
   "name": "pi-telegram-echo",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Voice echo extension for the Pi coding agent + @llblab/pi-telegram bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages. STT is delegated to a peer-dep provider extension (default: pi-whisper-stt) selected via extensions.pi-telegram-echo.stt_provider in telegram.json. The section is registered once per session so the in-Telegram menu buttons stay stable across hot-reloads.",
   "type": "module",
   "license": "MIT",

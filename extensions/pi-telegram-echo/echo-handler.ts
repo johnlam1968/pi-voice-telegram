@@ -150,7 +150,7 @@ async function transcribeAndMaybeEcho(
 			new Error(
 				`STT provider "${sttProviderId}" is not registered. ` +
 					`Installed providers: ${listSttProviders().map((p) => p.id).join(", ") || "(none)"}. ` +
-					`Install the provider extension (e.g., pi-${sttProviderId}) or change stt_provider in telegram.json.`,
+					`Install the matching provider extension or change stt_provider in telegram.json.`,
 			),
 			{ phase: "provider-missing", sttProviderId },
 		);

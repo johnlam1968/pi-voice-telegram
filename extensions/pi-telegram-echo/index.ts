@@ -3,6 +3,24 @@
  *
  * ## Version history
  *
+ * v0.3.1 — fix the v0.3.0 load-order race. The on-host test
+ *         surfaced: `pi-telegram-echo` session_start fired first
+ *         (registering the echo handler), the bridge processed
+ *         a voice message, and `pi-whisper-stt` session_start
+ *         fired LATER. The first voice message saw an empty
+ *         registry (`pi-telegram-echo/stt` `provider-missing`
+ *         event). v0.3.1 fixes this by moving the provider
+ *         registration to module load (top-level side effect in
+ *         `pi-whisper-stt/index.ts`); the provider is in the
+ *         registry synchronously when jiti loads the file, before
+ *         any session_start fires. Also moves the registry from
+ *         a per-jiti-instance `Map` to a `globalThis`-backed
+ *         registry (matching the bridge's `lib/sections.ts:267-271`
+ *         section-registry pattern), so the provider is visible
+ *         across all jiti instances in the same Node process.
+ *         Fixed a "pi-pi-whisper-stt" double-prefix typo in the
+ *         `provider-missing` error message.
+ *
  * v0.3.0 — STT provider standardization. The hardcoded
  *         `whisper-stt.ts` is replaced with a registry lookup:
  *         the configured `stt_provider` (default
