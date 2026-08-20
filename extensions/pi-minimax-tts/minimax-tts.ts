@@ -79,6 +79,55 @@ const ALLOWED_EMOTIONS = new Set([
 ]);
 const SPEECH_LEGACY_MODEL_RE = /^speech-0[12]$/;
 
+/** BCP-47 / ISO-639-1 → MiniMax `language_boost` (CSV of language
+ *  tags MiniMax uses to weight the model). The bridge's `lang`
+ *  is BCP-47 ("yue", "en", "zh"); MiniMax's `language_boost`
+ *  expects MiniMax's own labels ("Chinese,Yue", "English", …).
+ *  The table is the common intersection; values not in the table
+ *  fall through to the provider's default (`Chinese,Yue`) or
+ *  `auto` (when the user explicitly passes `extras.lang` as
+ *  `"auto"`). */
+const BCP47_TO_MINIMAX_LANG: Record<string, string> = {
+	auto: "auto",
+	yue: "Chinese,Yue",
+	zh: "Chinese",
+	"zh-cn": "Chinese",
+	"zh-tw": "Chinese",
+	"zh-hk": "Chinese,Yue",
+	en: "English",
+	"en-us": "English",
+	"en-gb": "English",
+	ja: "Japanese",
+	ko: "Korean",
+	fr: "French",
+	de: "German",
+	es: "Spanish",
+	ru: "Russian",
+	it: "Italian",
+	pt: "Portuguese",
+	ar: "Arabic",
+	hi: "Hindi",
+	vi: "Vietnamese",
+	id: "Indonesian",
+	th: "Thai",
+};
+
+/** If the input is a MiniMax-recognized label (e.g., the user set
+ *  `lang: "Chinese,Yue"` directly), pass it through. If it's
+ *  BCP-47, translate via `BCP47_TO_MINIMAX_LANG`. If it's
+ *  neither, return `undefined` so the field is omitted (which
+ *  lets MiniMax auto-detect). */
+function resolveLanguageBoost(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	if (BCP47_TO_MINIMAX_LANG[raw.toLowerCase()]) {
+		return BCP47_TO_MINIMAX_LANG[raw.toLowerCase()];
+	}
+	// If the user passed a MiniMax label directly (e.g., "English",
+	// "Chinese"), pass it through unchanged.
+	if (/^[A-Z][a-z]+(,[A-Z][a-z]+)*$/.test(raw)) return raw;
+	return undefined;
+}
+
 export class MinimaxTtsError extends Error {
 	constructor(
 		message: string,
@@ -401,6 +450,12 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 		process.env.MINIMAX_TTS_LANG,
 		DEFAULT_LANG,
 	)!;
+	// Translate BCP-47 (the bridge's `lang` and the env's value)
+	// to MiniMax's `language_boost` CSV format. If the input is
+	// already a MiniMax label (e.g., the user set it directly in
+	// `telegram.json`), pass it through. If neither, the field is
+	// omitted (MiniMax auto-detects).
+	const languageBoost = resolveLanguageBoost(lang);
 
 	const region = firstNonEmpty(
 		extras.region,
@@ -467,7 +522,7 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 				bitrate: Number(bitrate),
 				format,
 				channels: Number(channels),
-				language_boost: lang,
+				...(languageBoost ? { language_boost: languageBoost } : {}),
 			}
 		: {
 				model,
@@ -486,7 +541,7 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 					format,
 					channels: Number(channels),
 				},
-				language_boost: lang,
+				...(languageBoost ? { language_boost: languageBoost } : {}),
 			};
 
 	const host = baseUrl;
