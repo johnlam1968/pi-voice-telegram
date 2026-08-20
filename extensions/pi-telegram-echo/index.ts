@@ -1,19 +1,62 @@
 /**
  * pi-telegram-echo — entry point.
  *
- * Registered as a Pi extension via `package.json#pi.extensions`. The
- * host's jiti loader reads `./index.ts` directly; no build, no transpile.
+ * ## Version history
  *
- * Two responsibilities, both driven by `telegram.json` under
- * `extensions["pi-telegram-echo"]`:
+ * v0.2.1 — section is registered ONCE per session; the bridge
+ *         mints a fresh token at each `registerTelegramSection`
+ *         call, so re-registering on hot-reload would stale the
+ *         in-Telegram menu buttons ("This section is no longer
+ *         available."). The section's `getLabel` / `render` /
+ *         `settings.open` now read `loadEchoConfig()` live so the
+ *         UI always reflects the current state without needing a
+ *         fresh token. The watcher dropped the `filename === null`
+ *         over-eager fallback so sibling writes to the agent dir
+ *         (sessions, logs, state) no longer trigger a reconfigure.
+ *         Also a cleanup pass: dropped the v0.2.0 redundant
+ *         history comments, the dead `loadBotToken` (the token
+ *         was never passed to `sendTelegramView`), the unused
+ *         `clearEchoState` test helper, and the ported-but-unused
+ *         `detectLanguage` from the old monolithic.
  *
- *   1. Register a voice transcription provider that runs the operator's
- *      configured STT command and sends the 🎙️ reply to the user
- *      (fallback path — the operator can also configure a stronger
- *      inbound handler in `telegram.json.inboundHandlers` to bypass us).
- *   2. Register a Telegram Extension Section in `/telegram-settings`
- *      so the operator can toggle the echo on/off and pick an STT
- *      command preset (whisper-server, local script, or clear).
+ * v0.2.0 — port from the v0.1.0 scaffold to a working STT path.
+ *         The configurable `stt.command` indirection was replaced
+ *         with a hardcoded call to `./whisper-stt.ts`'s
+ *         `transcribe()` (in-process FormData POST to
+ *         `${WHISPER_SERVER_URL}/inference`). The section UI
+ *         was simplified to a single `echoEnabled` toggle
+ *         (STT command presets removed). The new `whisper-stt.ts`
+ *         is a verbatim port of the old monolithic's whisper
+ *         client (transcribe, WhisperSttError, env-var layering).
+ *
+ * v0.1.0 — initial scaffold. Configurable `stt.command` (argv
+ *         spawn) + STT command presets in the section UI. See
+ *         the v0.1.0 commit for the original design.
+ *
+ * ## Design
+ *
+ * Two registrations, both per voice.md "Voice Provider Extension
+ * Surface":
+ *
+ *   1. SECTION (registered ONCE per session, never re-registered):
+ *      the Telegram Extension Section for the echo on/off toggle.
+ *      It reads `loadEchoConfig()` live on every UI render. We
+ *      don't re-register on hot-reload because the bridge mints
+ *      a fresh token each time — re-registering would stale the
+ *      in-Telegram menu buttons ("This section is no longer
+ *      available."). The regression history is in PLAN.md §v0.2.1.
+ *
+ *   2. HANDLERS (re-registered on hot-reload): the update handler
+ *      (chat-ID stasher) and the voice transcription provider.
+ *      The provider closure captures `cfg.echoEnabled` so a
+ *      `telegram.json` write (e.g., from the section's toggle
+ *      button) takes effect on the next inbound voice message.
+ *
+ * The watcher fires only on a real `telegram.json` change
+ * (`filename` matches the base name). Sibling writes to the
+ * agent dir (sessions, logs, state) are ignored — they would
+ * otherwise re-trigger a hot-reload and waste the reconfigure
+ * cost.
  *
  * Public APIs used (all stable per @llblab/pi-telegram):
  *   - `@llblab/pi-telegram/voice`     → registerTelegramVoiceTranscriptionProvider
@@ -24,11 +67,11 @@
  *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
  *
  * Required host-side runtime (NOT bundled):
- *   - A working STT endpoint the operator has configured. The default
- *     `stt.command` is empty — the operator sets it via the Telegram
- *     Settings UI or by editing `telegram.json` directly.
- *   - For the reference install: `whisper-server` on
- *     `http://127.0.0.1:8080` (any HTTP STT works).
+ *   - A reachable whisper-server on `${WHISPER_SERVER_URL}/inference`
+ *     (default `http://127.0.0.1:8080`).
+ *   - The `PI_TELEGRAM_LANG` env var (default `yue`).
+ *   - The bridge's `telegram.json` `inboundHandlers` should be
+ *     empty so this extension is the only STT path.
  */
 
 import { existsSync, watch, type FSWatcher } from "node:fs";
@@ -38,37 +81,35 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { registerEchoHandlers } from "./echo-handler.js";
 import { registerEchoSection } from "./echo-section.js";
-import { loadEchoConfig, type EchoConfig } from "./telegram-config.js";
+import { loadEchoConfig } from "./telegram-config.js";
 
 export default function piTelegramEcho(pi: ExtensionAPI): void {
-	let disposers: Array<() => void> = [];
+	let handlerDisposers: Array<() => void> = [];
+	let sectionDisposer: (() => void) | null = null;
+
 	let configWatcher: FSWatcher | null = null;
 	let reloadTimer: NodeJS.Timeout | null = null;
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 	const configPath = join(agentDir, "telegram.json");
 
-	/**
-	 * Tear down all current registrations and re-run against the
-	 * current `telegram.json` under `extensions["pi-telegram-echo"]`.
-	 *
-	 * Called from three places:
-	 *   1. `session_start` — initial setup.
-	 *   2. The `fs.watch` callback (debounced 200ms) — when the
-	 *      operator edits `telegram.json` or uses the section UI
-	 *      (which writes to it).
-	 *   3. (Implicitly) at the top of the next call, via `disposers.forEach(d => d())`.
-	 */
-	const reconfigure = (): void => {
-		disposers.forEach((d: () => void) => d());
-		disposers = [];
-		const cfg = loadEchoConfig();
-		disposers.push(...registerEchoHandlers(cfg));
-		disposers.push(registerEchoSection(cfg));
+	/** Register the section once. Re-registering would mint a new
+	 *  token and stale the in-Telegram menu buttons. */
+	const registerSectionOnce = (): void => {
+		if (sectionDisposer) return;
+		sectionDisposer = registerEchoSection();
+	};
+
+	/** Re-register the handlers so the provider closure picks up
+	 *  the new `echoEnabled`. */
+	const reconfigureHandlers = (): void => {
+		handlerDisposers.forEach((d: () => void) => d());
+		handlerDisposers = [];
+		handlerDisposers.push(...registerEchoHandlers(loadEchoConfig()));
 	};
 
 	const startConfigWatcher = (): void => {
-		if (configWatcher) return; // already running
-		if (!existsSync(configPath)) return; // file not present yet
+		if (configWatcher) return;
+		if (!existsSync(configPath)) return;
 		const configDir = dirname(configPath);
 		const baseName = configPath.slice(configDir.length + 1);
 		try {
@@ -76,22 +117,28 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 				configDir,
 				{ persistent: true },
 				(_event, filename) => {
-					if (filename !== null && filename !== baseName) return;
+					// Only fire on a real `telegram.json` change. The
+					// null-filename fallback (some platforms) is
+					// intentionally NOT used — it would re-fire on
+					// every sibling write (sessions, logs, state)
+					// and waste a reconfigure.
+					if (filename !== baseName) return;
 					if (reloadTimer) clearTimeout(reloadTimer);
 					reloadTimer = setTimeout(() => {
 						reloadTimer = null;
-						reconfigure();
+						reconfigureHandlers();
 					}, 200);
 				},
 			);
 		} catch {
-			// fs.watch can fail in sandboxed envs. Hot-reload is a nicety;
-			// session_start still works, so a graceful fallback is fine.
+			// fs.watch can fail in sandboxed envs. Hot-reload is a
+			// nicety; session_start still works.
 		}
 	};
 
 	pi.on("session_start", () => {
-		reconfigure();
+		registerSectionOnce();
+		reconfigureHandlers();
 		startConfigWatcher();
 	});
 
@@ -100,14 +147,15 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 			clearTimeout(reloadTimer);
 			reloadTimer = null;
 		}
-		disposers.forEach((d: () => void) => d());
-		disposers = [];
+		handlerDisposers.forEach((d: () => void) => d());
+		handlerDisposers = [];
+		if (sectionDisposer) {
+			sectionDisposer();
+			sectionDisposer = null;
+		}
 		if (configWatcher) {
 			configWatcher.close();
 			configWatcher = null;
 		}
 	});
 }
-
-// Re-export the config type for consumers (e.g., tests).
-export type { EchoConfig };
