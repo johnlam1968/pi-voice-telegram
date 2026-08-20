@@ -162,7 +162,31 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 	const form = new FormData();
 	form.append("file", new Blob([bytes], { type: "audio/ogg" }), filename);
 	form.append("model", model);
-	form.append("language", lang);
+	// OpenAI's Whisper API accepts a limited set of ISO-639-1 language
+	// codes (en, zh, es, fr, de, ja, ko, etc.) and rejects others
+	// (e.g. `yue` for Cantonese) with HTTP 400 even though they're
+	// valid ISO 639-1. The clean fix for OpenAI's actual API is to
+	// omit the `language` field and let Whisper auto-detect — its
+	// auto-detect handles Cantonese correctly. The local
+	// `fw-openai-sts` shim (whisper.cpp) supports `yue` and
+	// forwards to whisper.cpp's `--language yue`, so we keep
+	// `language` for that path. Other OpenAI-compatible gateways
+	// (faster-whisper-server, etc.) usually accept the same set
+	// as their underlying model, so we keep `language` for them.
+	//
+	// The check is host-based: only OpenAI's actual API strips
+	// `language`. Custom gateways on a different host keep it.
+	let isOpenAiApi = false;
+	try {
+		const u = new URL(baseUrl);
+		isOpenAiApi = u.host === "api.openai.com";
+	} catch {
+		// baseUrl was a relative or otherwise invalid URL; treat as
+		// not-OpenAI (we'd have already failed the request anyway).
+	}
+	if (!isOpenAiApi) {
+		form.append("language", lang);
+	}
 	form.append("response_format", "text");
 
 	const headers: Record<string, string> = {};
