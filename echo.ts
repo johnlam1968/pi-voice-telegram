@@ -160,18 +160,37 @@ interface TelegramUpdate {
   edited_message?: TelegramUpdateVoiceMessage;
 }
 
-function fileNameFor(messageId: number, ext: string): string {
-  return `voice-${messageId}${ext}`;
-}
-
-function mimeToExtension(mime: string | undefined, fallback: string): string {
-  if (!mime) return fallback;
-  const m = mime.toLowerCase();
-  if (m.includes("ogg")) return ".ogg";
-  if (m.includes("opus")) return ".opus";
-  if (m.includes("mpeg") || m.includes("mp3")) return ".mp3";
-  if (m.includes("mp4") || m.includes("m4a")) return ".m4a";
-  if (m.includes("wav")) return ".wav";
+/**
+ * Mirror of `@llblab/pi-telegram/lib/media.ts:185` `guessExtensionFromMime`.
+ * The bridge builds the transcription-provider's `file.fileName` as
+ * `${prefix}-${message_id}${guessExtensionFromMime(mime, fallback)}` (see
+ * `lib/media.ts:864` for audio, `:881` for voice). The chat-ID stash in
+ * `handleTelegramUpdateForEcho` must use the *same* function for the
+ * extension and the *same* prefix to keep the `chatIdByFileName.get(file.fileName)`
+ * lookup in the provider branch working.
+ *
+ * Drift risk: the bridge's public API doesn't expose this function, so
+ * if upstream adds new mime mappings, this mirror will diverge and the
+ * chat-ID lookup will silently break for the new mime types. v0.18.0
+ * (registerTelegramSection migration) is the natural place to revisit
+ * this — the section can carry a "last seen bridge version" and warn
+ * the operator on drift.
+ */
+function guessExtensionFromMime(
+  mimeType: string | undefined,
+  fallback: string,
+): string {
+  if (!mimeType) return fallback;
+  const normalized = mimeType.toLowerCase();
+  if (normalized === "image/jpeg") return ".jpg";
+  if (normalized === "image/png") return ".png";
+  if (normalized === "image/webp") return ".webp";
+  if (normalized === "image/gif") return ".gif";
+  if (normalized === "audio/ogg") return ".ogg";
+  if (normalized === "audio/mpeg") return ".mp3";
+  if (normalized === "audio/wav") return ".wav";
+  if (normalized === "video/mp4") return ".mp4";
+  if (normalized === "application/pdf") return ".pdf";
   return fallback;
 }
 
@@ -217,8 +236,13 @@ export async function handleTelegramUpdateForEcho(
   }
 
   const isVoice = Boolean(msg.voice);
-  const ext = mimeToExtension(attachment.mime_type, isVoice ? ".ogg" : ".mp3");
-  const fileName = fileNameFor(msg.message_id, ext);
+  const ext = guessExtensionFromMime(attachment.mime_type, isVoice ? ".ogg" : ".mp3");
+  // Mirror the bridge's `lib/media.ts:864,881` filename format:
+  //   voice: `voice-${message_id}${ext}`
+  //   audio: `audio-${message_id}${ext}`
+  // The transcription provider's `file.fileName` is built with this same
+  // format; using anything else here silently drops the `🎙️` echo.
+  const fileName = `${isVoice ? "voice" : "audio"}-${msg.message_id}${ext}`;
   chatIdByFileName.set(fileName, msg.chat.id);
 
   return "pass";
