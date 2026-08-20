@@ -1,0 +1,27 @@
+{
+  "name": "pi-openai-tts",
+  "version": "0.1.0",
+  "description": "TTS provider for any OpenAI-compatible API gateway. Implements the TtsProvider contract from pi-telegram-tts-minimax; registers with id 'pi-openai-tts'. Talks POST /v1/audio/speech. Voices: alloy, echo, fable, onyx, nova, shimmer. Models: tts-1, tts-1-hd. Response formats: mp3, opus (default for Telegram), aac, flac, wav, pcm. Config (first non-empty wins): explicit TtsRequest.{voice,model,speed,responseFormat} > extensions['pi-openai-tts'].{voice,model,base_url,api_key} in telegram.json > OPENAI_TTS_{VOICE,MODEL,BASE_URL,FORMAT} env vars > ~/.pi/agent/auth.json (api_key only) > smart default (https://api.openai.com/v1).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-telegram-tts-minimax": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

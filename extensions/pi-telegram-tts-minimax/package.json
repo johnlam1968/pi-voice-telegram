@@ -1,7 +1,7 @@
 {
   "name": "pi-telegram-tts-minimax",
   "version": "0.1.0",
-  "description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. MiniMax T2A + ffmpeg libopus encode to OGG/Opus.",
+  "description": "TTS orchestrator for the Pi coding agent + @llblab/pi-telegram bridge. Registers a `TelegramVoiceSynthesisProvider` with the bridge; delegates to a peer-dep TtsProvider (selected via extensions['pi-telegram-tts-minimax'].tts_provider in telegram.json). The TtsProvider contract and globalThis-backed registry live in `./tts-provider.ts`; provider packages (`pi-openai-tts`, `pi-minimax-tts`) implement it.",
   "type": "module",
   "license": "MIT",
   "main": "./index.ts",
@@ -11,6 +11,11 @@
       "types": "./index.ts",
       "import": "./index.ts",
       "default": "./index.ts"
+    },
+    "./tts-provider": {
+      "types": "./tts-provider.ts",
+      "import": "./tts-provider.ts",
+      "default": "./tts-provider.ts"
     }
   },
   "files": [
@@ -19,7 +24,8 @@
   ],
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
-    "@llblab/pi-telegram": "*"
+    "@llblab/pi-telegram": "*",
+    "pi-openai-tts": "*"
   },
   "pi": {
     "extensions": ["./index.ts"]
