@@ -2,6 +2,17 @@
  * pi-voice-telegram — companion extension for the Pi coding agent + a
  * Telegram bridge (default: @llblab/pi-telegram).
  *
+ * v0.17.1: implement `getVoicePromptContribution(view)` on the synthesis
+ *         provider. Per @llblab/pi-telegram/docs/voice.md, the bridge
+ *         calls this when a turn is voice-tagged (mirror + voice input,
+ *         or always mode) and appends the first non-empty contribution
+ *         to the LLM's prompt. The contribution nudges the LLM toward
+ *         spoken style — no markdown, no lists, no URLs, no file paths,
+ *         spell out abbreviations, keep it under ~150 words. Pure
+ *         addition, no schema or behavior change for non-voice turns.
+ *         Bridge version requirement: present in 0.28.0+ (verified via
+ *         `node_modules/@llblab/pi-telegram/lib/voice.ts:64`).
+ *
  * v0.17.0: provider-responsibility fixes per the 2026-08-19 upstream
  *         convention audit. (1) Drop the false `rate` claim from the
  *         layered-defaults docstring in synthesis-provider.ts (the
