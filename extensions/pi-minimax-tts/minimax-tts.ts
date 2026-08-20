@@ -326,8 +326,21 @@ function extractAudio(resp: PostJsonResult): AudioResponse {
 }
 
 /** Wrap the synthesized audio in OGG/Opus via ffmpeg. Telegram's
- *  `sendVoice` accepts OGG/Opus natively. Output: Opus-in-OGG, mono,
- *  16 kbps bitrate (Telegram's default for voice messages). */
+ *  `sendVoice` accepts OGG/Opus natively. The argument set is
+ *  the one verified by docs/MINIMAX-T2A-FINDINGS.md §1:
+ *    -c:a libopus
+ *    -b:a 32k                 (matches Telegram's voice-message
+ *                              bandwidth; was 16k in v0.1.0)
+ *    -application voip        (speech-optimized mode)
+ *    -vbr on                  (variable bitrate)
+ *    -compression_level 10    (max compression)
+ *    -ac 1                    (mono)
+ *    -ar 48000                (Opus native rate)
+ *    -f ogg
+ *  The earlier 24 kHz / 16 k / no compression_level was valid
+ *  but produced a 48 kHz / unknown-rate output that decoders
+ *  handled leniently; the verified 32 kbps / 48 kHz / compression
+ *  level 10 settings are the round-trip-tested values. */
 function runFfmpegToOggOpus(
 	inputPath: string,
 	outputPath: string,
@@ -343,15 +356,17 @@ function runFfmpegToOggOpus(
 			"-c:a",
 			"libopus",
 			"-b:a",
-			"16k",
-			"-ar",
-			"24000",
-			"-ac",
-			"1",
+			"32k",
 			"-application",
 			"voip",
 			"-vbr",
 			"on",
+			"-compression_level",
+			"10",
+			"-ac",
+			"1",
+			"-ar",
+			"48000",
 			"-f",
 			"ogg",
 			outputPath,
@@ -511,6 +526,13 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 	const isLegacy = SPEECH_LEGACY_MODEL_RE.test(model);
 	const payload = isLegacy
 		? {
+				// Legacy `/v1/text_to_speech` (speech-01/02): flat
+				// payload, uses `channels` (plural) per the legacy
+				// docs. Note: speech-02 on this endpoint silently
+				// returns Mandarin for Cantonese voice+boost — see
+				// docs/MINIMAX-T2A-FINDINGS.md §2d. The default model
+				// is `speech-2.8-hd` which routes via the modern
+				// endpoint and actually produces Cantonese.
 				model,
 				text: req.text,
 				stream: false,
@@ -519,12 +541,24 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 				vol: Number(speed),
 				pitch: 0,
 				sample_rate: Number(sampleRate),
+				// `bitrate` is mp3-only per the modern docs §2 but
+				// the legacy endpoint accepts it for any format; the
+				// server ignores it for non-mp3. Send it
+				// unconditionally for the legacy path.
 				bitrate: Number(bitrate),
 				format,
 				channels: Number(channels),
 				...(languageBoost ? { language_boost: languageBoost } : {}),
 			}
 		: {
+				// Modern `/v1/t2a_v2` (speech-2.x): nested
+				// voice_setting / audio_setting. Note the field is
+				// `channel` (singular) per docs §2 — the legacy
+				// `mm-tts` shipped `channels` (plural) which the API
+				// accepted leniently, but the canonical name is
+				// singular. `bitrate` is mp3-only per docs §2 (server
+				// ignores it for other formats) — we only send it
+				// when the format is mp3.
 				model,
 				text: req.text,
 				stream: false,
@@ -537,9 +571,9 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 				},
 				audio_setting: {
 					sample_rate: Number(sampleRate),
-					bitrate: Number(bitrate),
+					...(format === "mp3" ? { bitrate: Number(bitrate) } : {}),
 					format,
-					channels: Number(channels),
+					channel: Number(channels),
 				},
 				...(languageBoost ? { language_boost: languageBoost } : {}),
 			};
