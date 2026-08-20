@@ -1,0 +1,28 @@
+{
+  "name": "pi-telegram-settings",
+  "version": "0.1.0",
+  "description": "LLM-callable tools for editing any telegram.json key on the Pi coding agent + @llblab/pi-telegram bridge. Not voice-specific — covers voice, non-voice, and any extension's settings.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@llblab/pi-telegram": "*",
+    "@sinclair/typebox": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

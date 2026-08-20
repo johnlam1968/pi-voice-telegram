@@ -1,0 +1,27 @@
+{
+  "name": "pi-telegram-tts-minimax",
+  "version": "0.1.0",
+  "description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. MiniMax T2A + ffmpeg libopus encode to OGG/Opus.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@llblab/pi-telegram": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

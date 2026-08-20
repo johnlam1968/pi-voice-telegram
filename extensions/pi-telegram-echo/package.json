@@ -1,0 +1,27 @@
+{
+  "name": "pi-telegram-echo",
+  "version": "0.1.0",
+  "description": "Voice echo extension for the Pi coding agent + @llblab/pi-telegram bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages. STT-agnostic — the operator configures any STT command.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@llblab/pi-telegram": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
