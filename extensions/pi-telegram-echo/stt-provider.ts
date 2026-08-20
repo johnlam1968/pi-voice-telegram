@@ -7,17 +7,19 @@
  * `pi-telegram-echo` looks up the configured provider by `id` at STT
  * call time (not at registration time) to avoid load-order coupling.
  *
- * Two providers ship in this repo:
+ * One provider ships in this repo (since v0.5.0 retired `pi-whisper-stt`):
  *
- *   - `pi-whisper-stt` (v0.3.0) — talks to the on-host whisper-server
- *     (`POST /inference` with multipart `file` + `language` +
- *     `response_format`). The current local backend.
- *
- *   - `pi-openai-stt` (v0.4.0+, planned) — talks to any OpenAI-compatible
- *     API gateway (`POST /v1/audio/transcriptions`). After the local
- *     whisper-server is shimmed to speak the same convention, this one
- *     provider works against OpenAI's API, faster-whisper-server, the
- *     local whisper-server (via the shim), etc.
+ *   - `pi-openai-stt` (v0.4.0+) — talks to any OpenAI-compatible API
+ *     gateway (`POST /v1/audio/transcriptions`). The on-host CUDA
+ *     `whisper-server` runs behind the `fw-openai-sts` shim (which
+ *     translates OpenAI's API to whisper.cpp's `/inference`), so this
+ *     one provider works against OpenAI's actual API, the local
+ *     whisper-server (via the shim), `faster-whisper-server`,
+ *     `whisper-asr-webservice`, and any other OpenAI-compatible
+ *     gateway. `base_url` accepts a string (single URL) or string[]
+ *     (fallback chain — "local first, cloud second" is the natural
+ *     on-host shape). New STT backends = new `base_url` values, not
+ *     new packages.
  *
  * The registry lives on `globalThis` (mirroring the bridge's
  * section-registry pattern at `lib/sections.ts:267-271`) so it's
@@ -32,7 +34,7 @@
  * In v0.3.0 the provider was registered on `session_start`. The
  * on-host test surfaced a race: `pi-telegram-echo` session_start
  * fired first (registering the echo handler), the bridge then
- * started processing a voice message, and `pi-whisper-stt`
+ * started processing a voice message, and the STT provider's
  * session_start fired LATER. The first voice message saw an
  * empty registry and the echo recorded a
  * `pi-telegram-echo/stt` `provider-missing` event. v0.3.1 fixes
@@ -104,7 +106,7 @@ function getRegistry(): SttProviderRegistry {
 
 /** Register a provider. Throws if the same id is already registered
  *  (typically a duplicate-load bug; the v0.3.1 defensive path in
- *  `pi-whisper-stt/index.ts` catches this and re-registers). */
+ *  the provider's `index.ts` catches this and re-registers). */
 export function registerSttProvider(provider: SttProvider): void {
 	const reg = getRegistry();
 	if (reg.providers.has(provider.id)) {

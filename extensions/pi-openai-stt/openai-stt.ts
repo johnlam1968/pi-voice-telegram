@@ -66,8 +66,8 @@
  *
  * The provider in `index.ts` re-wraps `OpenAiSttError` as
  * `ProviderError` to keep the registry's `code: 1|2|3|4` taxonomy
- * consistent with `pi-whisper-stt` and the old monolithic's
- * `WhisperSttError`.
+ * consistent across all STT providers and the old monolithic's
+ * `WhisperSttError` (1=usage, 2=network, 3=4xx, 4=5xx).
  */
 
 import { existsSync, readFileSync } from "node:fs";

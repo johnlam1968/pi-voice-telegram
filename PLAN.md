@@ -1,6 +1,6 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.16.2 shipped. v0.6.0 added companion settings + LLM tool surface. v0.7.0 made the settings file auto-seed on first run. v0.8.0 moved per-extension TTS/STT defaults into the JSON and templated prompt text against the resolved tool name. v0.9.0 made the settings file self-describing via a JSON Schema. v0.10.0 added the `pi_voice_telegram_schema` tool. v0.11.0 added the agent-modifies-config opt-in (config_read + config_write). v0.12.0 dropped the fake-security `tools.writable` flag and added a config_reset tool. v0.13.0 made the reset tool schema-driven (fills missing fields with schema defaults) and updated the config tool promptGuidelines to encourage proactive evolution. v0.14.0 added hot-reload of the companion settings file via `fs.watch` on the containing directory (with 200ms debounce). v0.15.0 added the seventh LLM tool, `pi_voice_telegram_list_voices`, backed by an embedded `voices.json` catalog (327 MiniMax TTS voices × 24 languages). v0.16.0 added inline TTS self-check via whisper-stt language detection — every synthesis is verified, result logged under `pi-voice-telegram/tts-verify`. v0.16.1 fixed the config_reset prompt so "reset config" maps directly to the tool without clarifying, and removed a stale "restart required" line from the description. v0.16.2 fixed the echo STT path: (1) echo.ts now consumes the JSON's `stt.lang` / `stt.baseUrl` / `stt.timeoutMs` via a new `setSttDefaults()` hook called by `index.ts`'s reconfigure (was reading `PI_TELEGRAM_STT_TIMEOUT_MS` from env directly — the v0.8.0+ design is "JSON > env > hardcoded" but v0.16.1's echo.ts skipped the JSON layer), and (2) a one-shot fallback retry when the primary STT result is empty, <2 chars, or punctuation-only — retries without the lang hint so whisper auto-detects, which produces verbatim Cantonese consistently per the 2026-08-17 probes.
+**Status:** v0.16.2 shipped (monolithic). The 3-extension split (v0.3.0 → v0.5.0) shipped on the `extensions/` track. **v0.5.0 (extensions track) retired `pi-whisper-stt`** — the default `stt_provider` flipped to `"pi-openai-stt"`, the `pi-whisper-stt` peer-dep was dropped from `pi-telegram-echo/package.json`, and `extensions/pi-whisper-stt/` was deleted from the repo. `pi-openai-stt` covers every backend `pi-whisper-stt` ever talked to (local CUDA whisper-server via the `fw-openai-sts` shim, OpenAI's actual API, faster-whisper-server, etc.) via a single `base_url` config (string or string[] for a fallback chain). **v0.4.4 + v0.4.5** added the `telegram.json` config source and the fallback-chain semantics. Punctuation in the returned transcript is a free "which path fired" indicator — the local shim forwards to whisper.cpp which produces space-separated transcripts; OpenAI's `whisper-1` produces comma-separated transcripts. **v0.7.0+ TTS standardization** remains the next planned track (mirrors the STT side, deferred until the STT side is battle-tested).
 
 ## What this is
 
@@ -1169,22 +1169,24 @@ If the user signs off on the design, the implementation order is:
 5. Commit v0.4.0.
 6. Update PLAN.md (mark v0.4.0 shipped, add v0.5.0 deprecation plan).
 
-### v0.5.0 — deprecate `pi-whisper-stt` (planning, depends on v0.4.0)
+### v0.5.0 — deprecate `pi-whisper-stt` (SHIPPED 2026-08-20, collapsed with v0.6.0)
 
-**Status:** PLANNING (depends on v0.4.0 shipping and the shim being battle-tested on host).
+**Status:** SHIPPED. The v0.5.0 + v0.6.0 plan was collapsed into a single release: deprecate + remove in one commit. The user is the only operator of this setup and has already migrated, so the planned one-release back-compat window (deprecated → removed across two releases) was unnecessary. The planned `session_start` migration that would rewrite `stt_provider: "pi-whisper-stt"` to `"pi-openai-stt"` is also skipped — operators with the old config see the `provider-missing` runtime event already wired in v0.3.0 and the install instructions in the message. The deprecation category `pi-whisper-stt/deprecation` is no longer needed (the package is gone).
 
-- Flip the default `stt_provider` in `telegram-config.ts` DEFAULTS from `"pi-whisper-stt"` to `"pi-openai-stt"`.
-- One-time migration on `session_start`: if the operator's config has `stt_provider: "pi-whisper-stt"` (or unset), rewrite to `"pi-openai-stt"`. Same shape as the v0.16.10 namespace migration (write a `.bak.<unix-ms>` first, then overwrite).
-- Add a deprecation notice to `pi-whisper-stt`'s `session_start` handler: "this provider is deprecated; please install the `fw-openai-sts` shim and switch to `pi-openai-stt`". Recorded via `recordTelegramRuntimeEvent` under `category: "pi-whisper-stt/deprecation"`.
-- Keep `pi-whisper-stt` in the repo for one more release.
+What shipped:
+- `pi-telegram-echo/telegram-config.ts` DEFAULTS flipped from `"pi-whisper-stt"` to `"pi-openai-stt"`.
+- `pi-telegram-echo/package.json` peer-dep `pi-whisper-stt` removed; version bumped to `0.5.0`.
+- `pi-openai-stt/package.json` version bumped to `0.2.0` (post-retirement milestone).
+- `extensions/pi-whisper-stt/` deleted from the repo (all 4 files: `index.ts`, `whisper-stt.ts`, `package.json`, `README.md`).
+- Top-of-file changelogs updated across `pi-telegram-echo/index.ts`, `pi-telegram-echo/stt-provider.ts`, `pi-telegram-echo/telegram-config.ts`, `pi-telegram-echo/echo-section.ts`, `pi-telegram-echo/echo-handler.ts`, `pi-openai-stt/index.ts`, `pi-openai-stt/openai-stt.ts`.
+- READMEs updated for both packages; `pi-openai-stt/README.md` adds a "Fallback chain" section covering the v0.4.5 string[] semantics + the punctuation indicator.
+- PLAN.md status line rewritten to reflect the v0.5.0 retirement as the current state.
 
-### v0.6.0 — remove `pi-whisper-stt` (planning, depends on v0.5.0)
+Operators still on `stt_provider: "pi-whisper-stt"`: see the v0.3.0-era `provider-missing` runtime event with the install instructions. Fix: set `stt_provider: "pi-openai-stt"`, install `pi-openai-stt` + the `fw-openai-sts` shim, add `extensions["pi-openai-stt"].base_url` to `telegram.json`. Full setup in `pi-openai-stt/README.md`.
 
-**Status:** PLANNING.
+### v0.6.0 — remove `pi-whisper-stt` (SHIPPED 2026-08-20, see v0.5.0 above)
 
-- Delete `extensions/pi-whisper-stt/` from the repo.
-- Drop the `pi-whisper-stt` peer-dep from `pi-telegram-echo/package.json`.
-- Operators still on the old default see a `provider-missing` runtime event with the install instructions (the message already says "Install the matching provider extension or change stt_provider in telegram.json"; the migration notice is now permanent).
+**Status:** SHIPPED. Collapsed into v0.5.0 (see above).
 
 ### v0.7.0+ — TTS standardization (the "etc", planning outline)
 

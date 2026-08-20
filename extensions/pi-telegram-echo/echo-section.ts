@@ -116,7 +116,7 @@ export function registerEchoSection(): () => void {
 function renderSettingsText(cfg: { echoEnabled: boolean; stt_provider: string }): string {
 	const providers = listSttProviders();
 	const providerLines = providers.length === 0
-		? "<i>(no providers installed — install e.g. pi-whisper-stt and reload)</i>"
+		? "<i>(no providers installed — install e.g. pi-openai-stt and reload)</i>"
 		: providers
 				.map((p) =>
 					`<code>${p.id}</code> — ${p.label}${p.id === cfg.stt_provider ? " ✓" : ""}`,

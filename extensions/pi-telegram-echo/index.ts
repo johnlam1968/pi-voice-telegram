@@ -3,6 +3,39 @@
  *
  * ## Version history
  *
+ * v0.5.0 — retire `pi-whisper-stt`. The default `stt_provider` in
+ *         `telegram-config.ts` flips from `"pi-whisper-stt"` to
+ *         `"pi-openai-stt"`. The `pi-whisper-stt` peer-dep is
+ *         removed from `package.json`. The repo's
+ *         `extensions/pi-whisper-stt/` directory is deleted —
+ *         `pi-openai-stt` covers every backend `pi-whisper-stt`
+ *         ever talked to (local CUDA whisper-server via the
+ *         `fw-openai-sts` shim, OpenAI's actual API, faster-
+ *         whisper-server, etc.) via `base_url` (string or
+ *         fallback-chain string[]). Operators with an older
+ *         `telegram.json` that has `stt_provider: "pi-whisper-stt"`
+ *         see a `provider-missing` runtime event on the next
+ *         voice message (already wired from v0.3.0); the fix is
+ *         to set `stt_provider: "pi-openai-stt"` and install the
+ *         provider + shim per `pi-openai-stt/README.md`. This
+ *         collapses PLAN.md's planned v0.5.0 (deprecate) + v0.6.0
+ *         (remove) into one release — the user is the only
+ *         operator and has already migrated.
+ *
+ * v0.4.5 — pick up the `pi-openai-stt` v0.4.5 fallback chain.
+ *         The echo extension itself is unchanged; the chain is
+ *         internal to `pi-openai-stt/transcribe()`. Operators who
+ *         set `extensions["pi-openai-stt"].base_url` to a string[]
+ *         get "local first, cloud second" behavior transparently.
+ *
+ * v0.4.4 — pick up the `pi-openai-stt` v0.4.4 `telegram.json`
+ *         config source. The echo extension's `transcribe()` call
+ *         is unchanged; `pi-openai-stt` now reads
+ *         `extensions["pi-openai-stt"].base_url` / `.api_key`
+ *         from `telegram.json` before falling back to env /
+ *         `auth.json`. The recommended way to switch between
+ *         local and cloud is now a one-line `telegram.json` edit.
+ *
  * v0.4.0 — add `pi-openai-stt` as a peer-dep provider and the
  *         `fw-openai-sts` shim. The same STT contract
  *         (`SttProvider`, looked up at call time from a
@@ -13,51 +46,46 @@
  *         `faster-whisper-server` with `--enable-openai-api`;
  *         `whisper-asr-webservice`; any other OpenAI-compatible
  *         gateway. New STT backends become "another
- *         `OPENAI_STT_BASE_URL` value" instead of "another
+ *         `base_url` value" instead of "another
  *         `pi-<backend>-stt` package". The on-host CUDA
- *         `whisper-server` (PID 704, `--language yue
- *         --no-timestamps --convert`) is unchanged — the shim
- *         adds ~1ms of HTTP overhead. The `pi-whisper-stt` provider
- *         is kept for back-compat (deprecated in v0.5.0, removed
- *         in v0.6.0). The on-host setup is: `cp scripts/fw-openai-sts.ts
- *         ~/.pi/agent/bin/fw-openai-sts; chmod +x
- *         ~/.pi/agent/bin/fw-openai-sts; fw-openai-sts &; export
- *         OPENAI_STT_BASE_URL=http://127.0.0.1:8081/v1`. Then
- *         `stt_provider: "pi-openai-stt"` in `telegram.json`.
+ *         `whisper-server` (`--language yue --no-timestamps
+ *         --convert`) is unchanged — the shim adds ~1ms of HTTP
+ *         overhead. The on-host setup is: `cp
+ *         scripts/fw-openai-sts.ts ~/.pi/agent/bin/fw-openai-sts;
+ *         chmod +x ~/.pi/agent/bin/fw-openai-sts; fw-openai-sts
+ *         &;` then `extensions["pi-openai-stt"].base_url =
+ *         "http://127.0.0.1:8081/v1"` in `telegram.json`. Then
+ *         `stt_provider: "pi-openai-stt"`.
  *
  * v0.3.1 — fix the v0.3.0 load-order race. The on-host test
  *         surfaced: `pi-telegram-echo` session_start fired first
  *         (registering the echo handler), the bridge processed
- *         a voice message, and `pi-whisper-stt` session_start
+ *         a voice message, and the STT provider's session_start
  *         fired LATER. The first voice message saw an empty
  *         registry (`pi-telegram-echo/stt` `provider-missing`
  *         event). v0.3.1 fixes this by moving the provider
  *         registration to module load (top-level side effect in
- *         `pi-whisper-stt/index.ts`); the provider is in the
+ *         the provider's `index.ts`); the provider is in the
  *         registry synchronously when jiti loads the file, before
  *         any session_start fires. Also moves the registry from
  *         a per-jiti-instance `Map` to a `globalThis`-backed
  *         registry (matching the bridge's `lib/sections.ts:267-271`
  *         section-registry pattern), so the provider is visible
  *         across all jiti instances in the same Node process.
- *         Fixed a "pi-pi-whisper-stt" double-prefix typo in the
- *         `provider-missing` error message.
  *
  * v0.3.0 — STT provider standardization. The hardcoded
  *         `whisper-stt.ts` is replaced with a registry lookup:
- *         the configured `stt_provider` (default
- *         `"pi-whisper-stt"`) is looked up at STT call time in
- *         the in-process registry (`./stt-provider.ts`). The
- *         first provider package, `pi-whisper-stt`, is a
- *         peer-dep companion extension that registers itself
- *         in the registry on `session_start`. The section UI
- *         gains a "STT provider" picker that lists installed
- *         providers. Adding a new STT backend = a new
- *         `pi-<backend>-stt` package that implements the
- *         `SttProvider` contract, OR a new `OPENAI_STT_BASE_URL`
- *         value if the backend already speaks the OpenAI
- *         API gateway convention. See PLAN.md §v0.3.0 for the
- *         full design and the v0.4.0+ `pi-openai-stt` follow-up.
+ *         the configured `stt_provider` is looked up at STT call
+ *         time in the in-process registry (`./stt-provider.ts`).
+ *         The first provider package registers itself in the
+ *         registry on `session_start`. The section UI gains a
+ *         "STT provider" picker that lists installed providers.
+ *         Adding a new STT backend = a new `pi-<backend>-stt`
+ *         package that implements the `SttProvider` contract,
+ *         OR a new `base_url` value if the backend already speaks
+ *         the OpenAI API gateway convention. See PLAN.md §v0.3.0
+ *         for the full design and the v0.4.0+ `pi-openai-stt`
+ *         follow-up.
  *
  * v0.2.1 — section is registered ONCE per session; the bridge
  *         mints a fresh token at each `registerTelegramSection`
@@ -77,7 +105,7 @@
  *
  * v0.2.0 — port from the v0.1.0 scaffold to a working STT path.
  *         The configurable `stt.command` indirection was replaced
- *         with a hardcoded call to `./whisper-stt.ts`'s
+ *         with a hardcoded call to the STT provider's
  *         `transcribe()` (in-process FormData POST to
  *         `${WHISPER_SERVER_URL}/inference`). The section UI
  *         was simplified to a single `echoEnabled` toggle
@@ -125,9 +153,10 @@
  *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
  *
  * Required host-side runtime (NOT bundled):
- *   - At least one STT provider extension installed and registered
- *     (default: `pi-whisper-stt`, which talks to
- *     `${WHISPER_SERVER_URL}/inference`).
+ *   - `pi-openai-stt` peer-dep installed and registered
+ *     (the default since v0.5.0; talks to any OpenAI-compatible
+ *     API gateway — OpenAI's actual API, the local `fw-openai-sts`
+ *     shim, `faster-whisper-server`, etc.).
  *   - The bridge's `telegram.json` `inboundHandlers` should be
  *     empty so this extension is the only STT path.
  */

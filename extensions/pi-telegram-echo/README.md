@@ -2,7 +2,7 @@
 
 Voice echo extension for the Pi coding agent + [@llblab/pi-telegram](https://github.com/llblab/pi-telegram) bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages.
 
-**STT is delegated to a peer-dep provider extension** ([`pi-whisper-stt`](../pi-whisper-stt/README.md) by default). The provider is selected via `extensions["pi-telegram-echo"].stt_provider` in `telegram.json`. The provider contract lives in `./stt-provider.ts`; any extension that implements it can plug in.
+**STT is delegated to a peer-dep provider extension**. The default is [`pi-openai-stt`](../pi-openai-stt/README.md) — a single provider that talks to any OpenAI-compatible gateway (OpenAI's actual API, the local `fw-openai-sts` shim, `faster-whisper-server`, etc.) with a fallback-chain config. The provider is selected via `extensions["pi-telegram-echo"].stt_provider` in `telegram.json`. The provider contract lives in `./stt-provider.ts`; any extension that implements it can plug in.
 
 ## Install
 
@@ -14,41 +14,39 @@ export { default } from "/path/to/this/repo/extensions/pi-telegram-echo/index.ts
 EOF
 ```
 
-And for the default STT provider (`pi-whisper-stt`):
+And for the default STT provider (`pi-openai-stt`):
 
 ```bash
-cat > ~/.pi/agent/extensions/pi-whisper-stt.ts <<'EOF'
-export { default } from "/path/to/this/repo/extensions/pi-whisper-stt/index.ts";
+cat > ~/.pi/agent/extensions/pi-openai-stt.ts <<'EOF'
+export { default } from "/path/to/this/repo/extensions/pi-openai-stt/index.ts";
 EOF
 ```
 
-The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source. An absolute path keeps the source's relative imports (`./whisper-stt.js` in `pi-whisper-stt`; `../pi-telegram-echo/stt-provider.js` to reach the contract) resolvable from the source dir.
+The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source. An absolute path keeps the source's relative imports (`../pi-telegram-echo/stt-provider.js` to reach the contract) resolvable from the source dir.
 
-For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-echo` and `pi-whisper-stt` from `~/.pi/agent/npm/`.
+For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-echo` and `pi-openai-stt` from `~/.pi/agent/npm/`.
 
 ## Configure
 
-Edit `~/.pi/agent/telegram.json` under `extensions["pi-telegram-echo"]`:
+Edit `~/.pi/agent/telegram.json`:
 
 ```json
 {
   "extensions": {
     "pi-telegram-echo": {
       "echoEnabled": true,
-      "stt_provider": "pi-whisper-stt"
+      "stt_provider": "pi-openai-stt"
+    },
+    "pi-openai-stt": {
+      "base_url": ["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]
     }
   }
 }
 ```
 
-`stt_provider` defaults to `"pi-whisper-stt"`. Switch to a different provider by setting the id and installing the corresponding extension (e.g., `pi-openai-stt` for OpenAI-compatible backends, planned for v0.4.0+).
+`stt_provider` defaults to `"pi-openai-stt"`. `pi-openai-stt`'s `base_url` is a string (single gateway) or a string[] (fallback chain — local first, cloud second is the natural on-host shape). See [`pi-openai-stt`](../pi-openai-stt/README.md) for the full config matrix.
 
-Tune the default provider's STT via env vars on the agent process:
-
-| Env var | Default | Purpose |
-| --- | --- | --- |
-| `WHISPER_SERVER_URL` | `http://127.0.0.1:8080` | whisper-server base URL (used by `pi-whisper-stt`). POST goes to `${url}/inference`. |
-| `PI_TELEGRAM_LANG` | `yue` | BCP-47 / ISO-639-1 language code passed to the provider. |
+The on-host CUDA `whisper-server` runs behind the `fw-openai-sts` shim — same VRAM, same model, ~1ms of HTTP overhead. To run only the cloud path, set `base_url: "https://api.openai.com/v1"` and provide a key via env / `auth.json` / `telegram.json`.
 
 **Make sure `telegram.json.inboundHandlers` is empty (or absent)** so this extension is the only STT path; otherwise the bridge's stronger handler will run first and bypass the echo.
 
@@ -58,10 +56,10 @@ Tune the default provider's STT via env vars on the agent process:
 
 ## Provider contract
 
-A provider is a Pi extension that calls `registerSttProvider(provider)` on `session_start` with an `SttProvider` instance:
+A provider is a Pi extension that calls `registerSttProvider(provider)` at module load with an `SttProvider` instance:
 
 ```typescript
-import { registerSttProvider, type SttProvider } from "pi-telegram-echo/stt-provider";
+import { registerSttProvider, unregisterSttProvider, type SttProvider } from "pi-telegram-echo/stt-provider";
 
 const provider: SttProvider = {
   id: "my-stt",
@@ -72,9 +70,23 @@ const provider: SttProvider = {
   },
 };
 
+// Register at module load (synchronous top-level side effect, same
+// pattern as pi-openai-stt v0.3.1). The provider is in the registry
+// before any session_start fires, before any message is processed.
+try {
+  registerSttProvider(provider);
+} catch {
+  unregisterSttProvider("my-stt");
+  registerSttProvider(provider);
+}
+
 export default function myStt(pi) {
-  pi.on("session_start", () => registerSttProvider(provider));
-  pi.on("session_shutdown", () => unregisterSttProvider("my-stt"));
+  pi.on("session_start", () => {
+    try { registerSttProvider(provider); } catch { /* already registered */ }
+  });
+  pi.on("session_shutdown", () => {
+    unregisterSttProvider("my-stt");
+  });
 }
 ```
 

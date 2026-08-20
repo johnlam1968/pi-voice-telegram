@@ -219,7 +219,7 @@ export function handleTelegramVoiceTranscription(
 	file: TelegramVoiceTranscriptionFile,
 	options?: { language?: string },
 ): Promise<TelegramVoiceTranscriptionProviderResult> {
-	return transcribeAndMaybeEcho(file, options, true, "pi-whisper-stt");
+	return transcribeAndMaybeEcho(file, options, true, "pi-openai-stt");
 }
 
 /** Wire the two handlers. Returns disposers (one per `register*`

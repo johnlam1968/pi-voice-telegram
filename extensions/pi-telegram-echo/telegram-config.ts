@@ -6,11 +6,13 @@
  * Schema-light: the operator-facing knobs are `echoEnabled` and
  * `stt_provider`. The STT provider is looked up in the in-process
  * registry (see `./stt-provider.ts`) at STT call time — the
- * provider extension (e.g., `pi-whisper-stt`, `pi-openai-stt`)
- * registers itself on `session_start`. For STT backends that
- * speak the OpenAI-compatible API gateway convention, install
- * `pi-openai-stt` and set `OPENAI_STT_BASE_URL` (no new
- * `pi-<backend>-stt` package needed).
+ * `pi-openai-stt` provider extension registers itself at module
+ * load. `pi-openai-stt` talks to any OpenAI-compatible API gateway
+ * (OpenAI's actual API, the local `fw-openai-sts` shim, faster-
+ * whisper-server, etc.) and supports a fallback chain in
+ * `extensions["pi-openai-stt"].base_url`. `pi-whisper-stt` was
+ * retired in v0.5.0; `pi-openai-stt` covers every backend it ever
+ * talked to.
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -23,13 +25,13 @@ export interface EchoConfig {
 	 *  text); this only gates the user-facing echo. */
 	echoEnabled: boolean;
 	/** The id of the STT provider to use. The provider must be
-	 *  installed and registered (default: `"pi-whisper-stt"`). */
+	 *  installed and registered (default: `"pi-openai-stt"`). */
 	stt_provider: string;
 }
 
 export const DEFAULTS: EchoConfig = {
 	echoEnabled: true,
-	stt_provider: "pi-whisper-stt",
+	stt_provider: "pi-openai-stt",
 };
 
 const KEY = "pi-telegram-echo";
