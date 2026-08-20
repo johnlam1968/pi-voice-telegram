@@ -3,6 +3,22 @@
  *
  * ## Version history
  *
+ * v0.3.0 — STT provider standardization. The hardcoded
+ *         `whisper-stt.ts` is replaced with a registry lookup:
+ *         the configured `stt_provider` (default
+ *         `"pi-whisper-stt"`) is looked up at STT call time in
+ *         the in-process registry (`./stt-provider.ts`). The
+ *         first provider package, `pi-whisper-stt`, is a
+ *         peer-dep companion extension that registers itself
+ *         in the registry on `session_start`. The section UI
+ *         gains a "STT provider" picker that lists installed
+ *         providers. Adding a new STT backend = a new
+ *         `pi-<backend>-stt` package that implements the
+ *         `SttProvider` contract, OR a new `OPENAI_STT_BASE_URL`
+ *         value if the backend already speaks the OpenAI
+ *         API gateway convention. See PLAN.md §v0.3.0 for the
+ *         full design and the v0.4.0+ `pi-openai-stt` follow-up.
+ *
  * v0.2.1 — section is registered ONCE per session; the bridge
  *         mints a fresh token at each `registerTelegramSection`
  *         call, so re-registering on hot-reload would stale the
@@ -39,18 +55,20 @@
  * Surface":
  *
  *   1. SECTION (registered ONCE per session, never re-registered):
- *      the Telegram Extension Section for the echo on/off toggle.
- *      It reads `loadEchoConfig()` live on every UI render. We
- *      don't re-register on hot-reload because the bridge mints
- *      a fresh token each time — re-registering would stale the
- *      in-Telegram menu buttons ("This section is no longer
- *      available."). The regression history is in PLAN.md §v0.2.1.
+ *      the Telegram Extension Section for the echo on/off toggle
+ *      + the STT provider picker. It reads `loadEchoConfig()`
+ *      live and lists `listSttProviders()` on every UI render.
+ *      We don't re-register on hot-reload because the bridge
+ *      mints a fresh token each time — re-registering would
+ *      stale the in-Telegram menu buttons ("This section is no
+ *      longer available.").
  *
  *   2. HANDLERS (re-registered on hot-reload): the update handler
  *      (chat-ID stasher) and the voice transcription provider.
- *      The provider closure captures `cfg.echoEnabled` so a
- *      `telegram.json` write (e.g., from the section's toggle
- *      button) takes effect on the next inbound voice message.
+ *      The provider closure captures `cfg.echoEnabled` and
+ *      `cfg.stt_provider` so a `telegram.json` write (e.g., from
+ *      the section's toggle button or provider picker) takes
+ *      effect on the next inbound voice message.
  *
  * The watcher fires only on a real `telegram.json` change
  * (`filename` matches the base name). Sibling writes to the
@@ -67,9 +85,9 @@
  *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
  *
  * Required host-side runtime (NOT bundled):
- *   - A reachable whisper-server on `${WHISPER_SERVER_URL}/inference`
- *     (default `http://127.0.0.1:8080`).
- *   - The `PI_TELEGRAM_LANG` env var (default `yue`).
+ *   - At least one STT provider extension installed and registered
+ *     (default: `pi-whisper-stt`, which talks to
+ *     `${WHISPER_SERVER_URL}/inference`).
  *   - The bridge's `telegram.json` `inboundHandlers` should be
  *     empty so this extension is the only STT path.
  */
@@ -100,7 +118,7 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 	};
 
 	/** Re-register the handlers so the provider closure picks up
-	 *  the new `echoEnabled`. */
+	 *  the new `echoEnabled` and `stt_provider`. */
 	const reconfigureHandlers = (): void => {
 		handlerDisposers.forEach((d: () => void) => d());
 		handlerDisposers = [];

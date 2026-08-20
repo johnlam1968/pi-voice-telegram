@@ -1,11 +1,14 @@
 /**
  * whisper-stt — in-process client for the whisper-server STT HTTP API.
  *
- * Used by `echo-handler.ts` as the inbound STT path (per voice.md,
- * registered transcription providers are the fallback chain in
- * registration order). The body is `multipart/form-data` to
+ * Owned by `pi-whisper-stt` (v0.3.0). Moved here from
+ * `extensions/pi-telegram-echo/whisper-stt.ts` so the STT is a
+ * separate, installable provider package. `pi-telegram-echo` looks
+ * it up in the provider registry at STT call time.
+ *
+ * The body is `multipart/form-data` to
  * `${WHISPER_SERVER_URL}/inference`; Node's built-in `FormData`
- * generates the boundary (the hand-rolled version was the source
+ * generates the boundary (a hand-rolled byte buffer was the source
  * of an upstream `,` echo bug — see the old `pi-voice-telegram`'s
  * git history for the full story).
  *
@@ -18,6 +21,12 @@
  *   2  network (timeout, DNS, connection refused)
  *   3  API client (HTTP 4xx, or "error: …" body)
  *   4  API server (HTTP 5xx)
+ *
+ * After the v0.4.0+ refactor of the local whisper-server to speak
+ * the OpenAI-compatible API gateway convention, this package is
+ * deprecated in favor of `pi-openai-stt` (one provider, many
+ * backends). The shim is a host-side Node script (no upstream
+ * whisper.cpp change needed).
  */
 
 import { readFile } from "node:fs/promises";

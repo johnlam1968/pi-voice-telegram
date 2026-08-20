@@ -2,14 +2,15 @@
  * telegram-config.ts — read/write this extension's key in telegram.json.
  *
  * Persistence: `telegram.json` under `extensions["pi-telegram-echo"]`.
- * Schema-light: the only operator-facing knob is `echoEnabled`. STT
- * is hardcoded to whisper-server (env vars `WHISPER_SERVER_URL`,
- * `PI_TELEGRAM_LANG`); see `whisper-stt.ts`.
  *
- * For alternative STT backends, the operator/agent would install a
- * separate `pi-telegram-stt-*` extension (per voice.md, registered
- * transcription providers form a fallback chain in registration
- * order; the first to return non-empty wins).
+ * Schema-light: the operator-facing knobs are `echoEnabled` and
+ * `stt_provider`. The STT provider is looked up in the in-process
+ * registry (see `./stt-provider.ts`) at STT call time — the
+ * provider extension (e.g., `pi-whisper-stt`, `pi-openai-stt`)
+ * registers itself on `session_start`. For STT backends that
+ * speak the OpenAI-compatible API gateway convention, install
+ * `pi-openai-stt` and set `OPENAI_STT_BASE_URL` (no new
+ * `pi-<backend>-stt` package needed).
  */
 
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -21,10 +22,14 @@ export interface EchoConfig {
 	 *  is always returned to the bridge (so the LLM always gets
 	 *  text); this only gates the user-facing echo. */
 	echoEnabled: boolean;
+	/** The id of the STT provider to use. The provider must be
+	 *  installed and registered (default: `"pi-whisper-stt"`). */
+	stt_provider: string;
 }
 
 export const DEFAULTS: EchoConfig = {
 	echoEnabled: true,
+	stt_provider: "pi-whisper-stt",
 };
 
 const KEY = "pi-telegram-echo";
@@ -51,6 +56,10 @@ export function loadEchoConfig(): EchoConfig {
 				typeof block.echoEnabled === "boolean"
 					? block.echoEnabled
 					: DEFAULTS.echoEnabled,
+			stt_provider:
+				typeof block.stt_provider === "string" && block.stt_provider
+					? block.stt_provider
+					: DEFAULTS.stt_provider,
 		};
 	} catch {
 		return structuredClone(DEFAULTS);
@@ -71,7 +80,10 @@ export function saveEchoConfig(cfg: EchoConfig): void {
 		}
 	}
 	const extensions = (parsed.extensions ?? {}) as Record<string, unknown>;
-	extensions[KEY] = { echoEnabled: cfg.echoEnabled };
+	extensions[KEY] = {
+		echoEnabled: cfg.echoEnabled,
+		stt_provider: cfg.stt_provider,
+	};
 	parsed.extensions = extensions;
 	// Atomic write: temp + rename.
 	const tempPath = path + ".tmp";

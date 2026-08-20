@@ -1,0 +1,27 @@
+{
+  "name": "pi-whisper-stt",
+  "version": "0.1.0",
+  "description": "STT provider for the on-host whisper-server. Implements the `SttProvider` contract from `pi-telegram-echo`; registers with id `pi-whisper-stt`. Talks `POST /inference` with multipart `file` + `language` + `response_format`. Env vars: WHISPER_SERVER_URL (default http://127.0.0.1:8080), PI_TELEGRAM_LANG (default yue).",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "pi-telegram-echo": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

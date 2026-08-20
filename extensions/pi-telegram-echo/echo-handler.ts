@@ -10,16 +10,18 @@
  *      transcription provider needs the chat ID for the echo, but
  *      the provider API doesn't pass it.
  *
- *   2. `registerTelegramVoiceTranscriptionProvider` — runs
- *      whisper-server's `/inference` on the bridge-downloaded
- *      file, sends the 🎙️ reply to the user (when
- *      `echoEnabled`), and returns the transcript so the bridge
- *      can include it in the agent's user message.
+ *   2. `registerTelegramVoiceTranscriptionProvider` — looks up
+ *      the configured STT provider in the registry (v0.3.0+,
+ *      previously hardcoded to whisper-server), calls
+ *      `provider.transcribe()`, and sends the 🎙️ reply to the
+ *      user (when `echoEnabled`). Returns the transcript for the
+ *      bridge to include in the agent's user message.
  *
- * Per voice.md, configured `inboundHandlers` and programmatic
- * inbound handlers run first; registered transcription providers
- * are the fallback chain. To make this extension the only STT
- * path, leave `telegram.json.inboundHandlers` empty.
+ * The provider is looked up at STT call time (not at registration
+ * time) so the provider's `session_start` doesn't have to fire
+ * before ours. If the provider isn't registered, the echo records
+ * a runtime event and returns `undefined` so the next provider in
+ * the chain can try.
  */
 
 import {
@@ -38,9 +40,10 @@ import {
 } from "@llblab/pi-telegram/voice";
 
 import {
-	transcribe as runStt,
-	WhisperSttError,
-} from "./whisper-stt.js";
+	getSttProvider,
+	listSttProviders,
+	ProviderError,
+} from "./stt-provider.js";
 
 import type { EchoConfig } from "./telegram-config.js";
 
@@ -125,39 +128,51 @@ export async function handleTelegramUpdateForEcho(
 	return "pass";
 }
 
-/** The voice transcription provider. Returns the transcript for
- *  the bridge to include in the user message, and sends the
- *  🎙️ reply to the user (when `echoEnabled`). Returns `undefined`
- *  on any failure (no path, no fileName, STT error, empty
- *  transcript) so the next provider in the chain can try. */
+/** The voice transcription provider. Looks up the configured STT
+ *  provider in the registry at call time, runs the transcription,
+ *  sends the 🎙️ echo (when `echoEnabled`), and returns the
+ *  transcript for the bridge to include in the user message.
+ *  Returns `undefined` on any failure so the next provider in
+ *  the chain can try. */
 async function transcribeAndMaybeEcho(
 	file: TelegramVoiceTranscriptionFile,
 	options: { language?: string } | undefined,
 	echoEnabled: boolean,
+	sttProviderId: string,
 ): Promise<TelegramVoiceTranscriptionProviderResult> {
 	if (!file.path) return undefined;
 	if (!file.fileName) return undefined;
 
+	const provider = getSttProvider(sttProviderId);
+	if (!provider) {
+		recordTelegramRuntimeEvent(
+			"pi-telegram-echo/stt",
+			new Error(
+				`STT provider "${sttProviderId}" is not registered. ` +
+					`Installed providers: ${listSttProviders().map((p) => p.id).join(", ") || "(none)"}. ` +
+					`Install the provider extension (e.g., pi-${sttProviderId}) or change stt_provider in telegram.json.`,
+			),
+			{ phase: "provider-missing", sttProviderId },
+		);
+		return undefined;
+	}
+
 	let transcript: string;
 	try {
 		transcript = (
-			await runStt({
+			await provider.transcribe({
 				inputPath: file.path,
 				lang: options?.language ?? process.env.PI_TELEGRAM_LANG,
-				baseUrl: process.env.WHISPER_SERVER_URL,
-				timeoutMs: 60_000,
 			})
 		).trim();
 	} catch (err) {
-		// Record the failure and pass through. Not transcribing is
-		// preferable to failing the whole inbound chain on a
-		// transient STT outage.
 		recordTelegramRuntimeEvent(
 			"pi-telegram-echo/stt",
 			err instanceof Error ? err : new Error(String(err)),
 			{
 				phase: "run",
-				...(err instanceof WhisperSttError
+				providerId: provider.id,
+				...(err instanceof ProviderError
 					? { code: err.code, detail: err.detail }
 					: {}),
 			},
@@ -169,7 +184,7 @@ async function transcribeAndMaybeEcho(
 	// Best-effort 🎙️ echo. Failure here does NOT fail the
 	// transcription — the agent still gets the transcript via the
 	// return value.
-	if (echoEnabled && file.fileName) {
+	if (echoEnabled) {
 		const chatId = chatIdByFileName.get(file.fileName);
 		if (chatId !== undefined) {
 			try {
@@ -198,13 +213,13 @@ async function transcribeAndMaybeEcho(
 }
 
 /** Canonical entry point. Exported for tests; the runtime path is
- *  through `registerEchoHandlers` so `cfg.echoEnabled` is captured
- *  in the closure. */
+ *  through `registerEchoHandlers` so `cfg.echoEnabled` and
+ *  `cfg.stt_provider` are captured in the closure. */
 export function handleTelegramVoiceTranscription(
 	file: TelegramVoiceTranscriptionFile,
 	options?: { language?: string },
 ): Promise<TelegramVoiceTranscriptionProviderResult> {
-	return transcribeAndMaybeEcho(file, options, true);
+	return transcribeAndMaybeEcho(file, options, true, "pi-whisper-stt");
 }
 
 /** Wire the two handlers. Returns disposers (one per `register*`
@@ -213,10 +228,10 @@ export function handleTelegramVoiceTranscription(
  *
  *  The provider is ALWAYS registered (so the agent always gets
  *  the transcript as text). The 🎙️ echo is gated on
- *  `cfg.echoEnabled`, captured in the closure; `index.ts`'s
- *  hot-reload re-runs `registerEchoHandlers` on every
- *  `telegram.json` change (200ms debounce) so toggling via the
- *  section UI takes effect on the next inbound voice message. */
+ *  `cfg.echoEnabled`. The STT provider is looked up at call time
+ *  via `cfg.stt_provider` (the registry may not have the provider
+ *  yet at registration time). Hot-reload re-creates the closure
+ *  with the new `cfg.echoEnabled` + `cfg.stt_provider`. */
 export function registerEchoHandlers(cfg: EchoConfig): Array<() => void> {
 	const disposers: Array<() => void> = [];
 
@@ -225,7 +240,13 @@ export function registerEchoHandlers(cfg: EchoConfig): Array<() => void> {
 	);
 	disposers.push(
 		registerTelegramVoiceTranscriptionProvider(
-			(file, options) => transcribeAndMaybeEcho(file, options, cfg.echoEnabled),
+			(file, options) =>
+				transcribeAndMaybeEcho(
+					file,
+					options,
+					cfg.echoEnabled,
+					cfg.stt_provider,
+				),
 			{ id: "pi-telegram-echo/stt" },
 		),
 	);

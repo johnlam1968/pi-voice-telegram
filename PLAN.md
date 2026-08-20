@@ -952,6 +952,79 @@ Real verification: trigger a fresh auto-seed on `pi-agent-john` by deleting the 
 
 **Next (v0.3.0+):** standardize the STT provider interface so the operator/agent can install a `pi-<provider>-sts` companion extension and select it via `extensions["pi-telegram-echo"].stt_provider`. The current v0.2.x is hardcoded to whisper-server; the v0.3.0 design pulls the STT out into a small provider-extension contract and lets the on-host whisper-server (or any other backend) speak the standard gateway protocol. See the standardization design in this section below (work in progress).
 
+### v0.3.0 — STT provider standardization (in progress)
+
+**Status:** IMPLEMENTING. v0.3.0 introduces a small provider-extension contract; the hardcoded `whisper-stt.ts` is moved into a peer-dep companion extension `pi-whisper-stt`. v0.4.0+ will add a `pi-openai-stt` that speaks the OpenAI-compatible API gateway convention, and the local `whisper-server` will be modified (via a host-side shim) to expose the same convention so one provider implementation can talk to multiple backends.
+
+**Why (user-driven architectural rethink, 2026-08-20):** the v0.2.x design hardcodes STT to whisper-server. Every new backend (OpenAI's Whisper API, faster-whisper-server, ahmetoner's whisper-asr-webservice, Google STT, etc.) would need a new `pi-<backend>-stt` package. The user wants a small contract that any provider can implement, plus a single standard gateway protocol that the local `whisper-server` can speak — so one `pi-openai-stt` provider implementation works against many backends.
+
+**The contract** (in `extensions/pi-telegram-echo/stt-provider.ts`):
+
+```typescript
+export interface SttRequest {
+  inputPath: string;  // OGG / MP3 / WAV on disk
+  lang?: string;      // BCP-47 / ISO-639-1, e.g. "yue", "en", "zh"
+}
+
+export class ProviderError extends Error {
+  constructor(message: string, readonly code: 1|2|3|4) {
+    super(message);
+    this.name = "ProviderError";
+  }
+}
+
+export interface SttProvider {
+  /** Stable id, used as the value of `stt_provider` in the config. */
+  id: string;
+  /** Human label, shown in the section UI picker. */
+  label: string;
+  transcribe(req: SttRequest): Promise<string>;
+}
+```
+
+`code: 1|2|3|4` mirrors `WhisperSttError` (1=usage, 2=network, 3=4xx, 4=5xx). The bridge's `recordTelegramRuntimeEvent` receives the error with the same code taxonomy the old monolithic used, so the operator's `telegram-status` view is consistent across providers.
+
+**The registry** (in the same file): a tiny in-process map of `id → SttProvider`. Provider extensions register themselves on `session_start`; `pi-telegram-echo` looks up the configured `stt_provider` at STT call time (NOT at registration time) to avoid load-order coupling.
+
+**`pi-whisper-stt` (v0.3.0, the first provider package):**
+
+A standalone Pi extension (under `extensions/pi-whisper-stt/`) that:
+- Registers itself in the registry on `session_start` with `id: "pi-whisper-stt"`.
+- Owns the `whisper-server /inference` multipart contract (the current code, moved out of `pi-telegram-echo/whisper-stt.ts`).
+- Tunes via `WHISPER_SERVER_URL` (default `http://127.0.0.1:8080`) and `PI_TELEGRAM_LANG` (default `yue`).
+- This is the short-term path: it talks to the local `whisper-server` AS-IS. The OpenAI-compatible refactor (v0.4.0) replaces this package.
+
+**`pi-telegram-echo` v0.3.0 changes:**
+
+- The hardcoded `import { transcribe } from "./whisper-stt.js"` is replaced with a registry lookup at STT time: `getSttProvider(cfg.stt_provider)?.transcribe(req)`. If the configured provider isn't registered (not installed, or hasn't loaded yet), the echo records a runtime event under `category: "pi-telegram-echo/stt"`, `phase: "provider-missing"`, and returns `undefined` so the bridge's next provider in the chain can try.
+- `telegram-config.ts` gains `stt_provider: string` (default `"pi-whisper-stt"`).
+- The section UI gains a "STT provider" picker (one button per registered provider). The selection persists in `telegram.json` via `saveEchoConfig` and takes effect on the next inbound voice message.
+- `whisper-stt.ts` is deleted from the package (moved to `pi-whisper-stt`).
+
+**`pi-openai-stt` (v0.4.0, planned, NOT in this session):**
+
+A standalone Pi extension that:
+- Registers itself in the registry with `id: "pi-openai-stt"`.
+- Speaks the OpenAI `/v1/audio/transcriptions` API gateway convention (`POST /v1/audio/transcriptions` with multipart `file` + `model` + optional `language` + optional `response_format`).
+- Configurable base URL via `OPENAI_STT_BASE_URL` (default `https://api.openai.com/v1` for OpenAI's API; can be pointed at any OpenAI-compatible gateway — `http://127.0.0.1:8080/v1` for the local whisper-server after the v0.4.0+ shim, `http://127.0.0.1:8000/v1` for faster-whisper-server, etc.).
+- API key via `OPENAI_API_KEY` (env-only; never read from `telegram.json`).
+
+**Modifying the local `whisper-server` to speak OpenAI-compatible (v0.4.0+ follow-up):**
+
+The on-host `whisper-server` (whisper.cpp's `examples/server`) currently exposes `POST /inference` with multipart `file` + `language` + `response_format`. To make it speak OpenAI-compatible, two options:
+
+1. **Host-side shim (recommended for v0.4.0):** a small Node script (`fw-openai-sts` on `$PATH`) that listens on a port, accepts `POST /v1/audio/transcriptions`, translates to the whisper-server's `/inference`, and returns the OpenAI-shaped JSON response. No whisper.cpp changes; the operator just runs the shim on a different port (e.g., 8081) and points `OPENAI_STT_BASE_URL=http://127.0.0.1:8081/v1`.
+2. **Upstream patch to whisper.cpp's server:** add the OpenAI-compatible path. This is the cleanest long-term but waits on upstream review.
+
+The shim (option 1) is the v0.4.0 path. After it's running, `pi-openai-stt` is the only STT provider the operator needs — the same code talks to OpenAI's API, faster-whisper-server, the local whisper-server (via the shim), and any other OpenAI-compatible backend. `pi-whisper-stt` is then deprecated (kept for one release for back-compat, then removed).
+
+**Why this is better than the v0.2.x hardcoded design:**
+
+- One `pi-openai-stt` package talks to many backends (the OpenAI API, faster-whisper-server, ahmetoner's whisper-asr-webservice, the local whisper-server via shim, etc.). The operator/agent picks the backend by setting `OPENAI_STT_BASE_URL`.
+- The local `whisper-server` (which keeps the model loaded in VRAM for sub-second latency per call) is preserved as the primary backend — just with an OpenAI-compatible face.
+- New STT backends become "another `OPENAI_STT_BASE_URL` value" instead of "another `pi-<backend>-stt` package".
+- The provider contract is small (~30 lines) and stable. Adding a non-OpenAI backend (e.g., a streaming gRPC STT) becomes a new `pi-<backend>-stt` package that implements the same contract.
+
 ## Migration notes (v0.17.0+ → ...)
 
 - **v0.16.12 → v0.17.0:** no breaking changes. Phase A is docstring + one runtime event + a verification step (and possibly a chat-ID fix if Task A3 finds a mismatch).
