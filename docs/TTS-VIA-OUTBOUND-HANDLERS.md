@@ -1,7 +1,9 @@
 # TTS via `outboundHandlers` — no extension required
 
 Investigation date: 2026-08-21
-Status: **canonical** for both MiniMax and OpenAI-compatible TTS
+Last updated: 2026-08-21 (added `scripts/tts-openai.mjs` as a parallel
+                  pipeline to `scripts/tts-minimax.mjs`)
+Status: **canonical** for both MiniMax and OpenAI TTS
 
 The bridge's `outboundHandlers` (a list of command-template steps, declared in
 `telegram.json#outboundHandlers`) is the **canonical integration point for TTS**.
@@ -12,7 +14,11 @@ step into the next via the placeholder file paths.
 
 ## TL;DR
 
-For MiniMax:
+We ship two TTS scripts in `scripts/`. Either one is a complete
+voice-handler pipeline. Pick by editing `telegram.json#outboundHandlers`
+— the operator decides at install time, not at runtime.
+
+### For MiniMax (Cantonese-first, 327-voice catalog)
 
 ```json
 "outboundHandlers": [
@@ -27,23 +33,46 @@ For MiniMax:
 ]
 ```
 
-For OpenAI-compatible TTS (uses binary response, no JSON parsing needed):
+### For OpenAI TTS (English-first, 13 voices, `instructions` for Cantonese)
 
 ```json
 "outboundHandlers": [
   {
     "type": "voice",
     "template": [
-      "API_KEY=\"${OPENAI_API_KEY:-$(python3 -c 'import json; print(json.load(open(\"/home/john/.pi/agent/auth.json\")).get(\"openai\",{}).get(\"key\",\"\"))' 2>/dev/null)}\"; curl -sS -X POST -H \"Authorization: Bearer $API_KEY\" -H 'Content-Type: application/json' -d '{\"model\":\"gpt-4o-mini-tts\",\"voice\":\"cedar\",\"input\":\"{text}\",\"response_format\":\"mp3\"}' https://api.openai.com/v1/audio/speech -o {mp3}",
-      "ffmpeg -y -i {mp3} -c:a libopus -b:a 32k -ar 48000 -ac 1 -f ogg {ogg}"
+      "/home/john/CodingProjects/pi-voice-telegram/scripts/tts-openai.mjs --out {mp3} --instructions 'Speak in Cantonese.'",
+      "ffmpeg -y -i {mp3} -c:a libopus -b:a 32k -ar 48000 -ac 1 -application voip -vbr on -compression_level 10 -f ogg {ogg}"
     ],
     "output": "ogg"
   }
 ]
 ```
 
-That's the whole TTS pipeline. Edit `telegram.json`, restart `pi`, and voice
+For either pipeline, edit `telegram.json`, restart `pi`, and voice
 replies just work.
+
+### Picking one vs the other
+
+| Concern | MiniMax | OpenAI |
+|---|---|---|
+| Default voice quality for Cantonese | High — voices like `Cantonese_CuteGirl` are Cantonese-native | Adequate — voices are English-optimized; need `instructions: "Speak in Cantonese."` to stay in Cantonese |
+| Voice catalog | 327 voices across 22 languages | 13 voices (English-first) |
+| Configurable per-knob knobs | 27 (every OpenAPI field) | 6 (model, voice, response_format, speed, instructions, +config override) |
+| Response shape | JSON with hex-encoded audio (needs decode) | Binary audio directly |
+| Streaming | Not implemented in the script | Not implemented in the script |
+| Speed of synthesis | ~1.5–2.5 s for a short utterance | ~1.0–1.5 s for the same |
+| Pricing (operator cost) | MiniMax T2A rate card | OpenAI TTS rate card |
+| Auth | `MINIMAX_API_KEY` or `~/.mmx/config.json` | `OPENAI_API_KEY` or `~/.pi/agent/auth.json` |
+
+For the operator's current setup (Cantonese agent on `pi-telegram`),
+**MiniMax is the better default** — `Cantonese_CuteGirl` is a native
+Cantonese voice and needs no `instructions` trick to stay in
+Cantonese. OpenAI is a useful fallback or for operators who want a
+specific OpenAI voice (`marin` / `cedar` / `coral` / etc.).
+
+Both scripts accept the same CLI surface (`--out`, `--text` /
+stdin, `--verbose`, `PI_VOICE_TELEGRAM_DEBUG=1`) so swapping is a
+one-line `telegram.json` edit.
 
 ## Why no extension
 
@@ -295,6 +324,9 @@ This is the "decided at install time, not at runtime" property the user
 asked for — except here the "install" is just a `telegram.json` edit. The
 operator can keep multiple `outboundHandlers` entries in `telegram.json` and
 toggle them by commenting/uncommenting.
+
+For a side-by-side comparison of the two scripts, see the table
+in the TL;DR above.
 
 ## The STT side is unchanged
 
