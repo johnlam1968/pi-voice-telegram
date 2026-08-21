@@ -457,6 +457,15 @@ Caveat: `/home/john/pi-cluster/` is NOT a git repo, so Dockerfile.pi + docker-en
 
 2. **TTS auto-send mode.** v0.6.0 uses the two-step pattern (synthesize → `telegram_attach`). A future `tools.tts.delivery: "telegram" | "file" | "auto"` could collapse to one-step when the bridge exposes a `sendTelegramVoice(filePath, chatId?)` directly. Defer until the bridge adds that primitive.
 
+3. **Summarize-for-voice on long / code-heavy replies.** Current behavior: when the agent's reply exceeds OpenAI's 2000-token limit (`scripts/tts-openai.mjs` defaults to `--max-chars 3000` and auto-halves + retries), the script truncates at a sentence boundary. The user still gets the full text in chat; voice is a preview.
+
+   A future improvement: when the reply is long or code/formula-heavy, run a small LLM call to produce a brief "speech-friendly" summary, and send the brief to the TTS script. Truncation is lossy but cheap; summarization is lossy-but-coherent. The trigger heuristics would need to know:
+   - the reply's length (cheap)
+   - the code/formula density (regex/heuristic — cheap but imperfect)
+   - optionally: the user's recent preference (did they want a voice reply to this kind of question?)
+
+   This needs a separate small extension (something like `pi-tts-summarize` that hooks into the bridge's `recordTelegramRuntimeEvent` or a new bridge primitive) plus a `telegram.json` opt-in (`extensions["pi-tts-summarize"].enabled: true`, threshold, max-brief-chars). Defer until truncation proves insufficient or the user requests a brief. The 2026-08-21 incident (a 4897-char Cantonese lyrics analysis reply that exceeded the 2000-token limit) is the original motivation.
+
 3. **Per-extension TTS defaults** (model / voiceId / format) currently live as `PI_MM_TTS_*` env vars. Could move into `pi-voice-telegram.json` as `tts.{model,voiceId,format}`. Not blocking.
 
 4. **Echo template** is currently hard-coded `🎙️ "<i>{transcript}</i>"`. Could be made configurable via `inbound.echoTemplate: string | null`. Low priority.
