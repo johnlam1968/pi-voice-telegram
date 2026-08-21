@@ -263,11 +263,103 @@ async function readStdin() {
 	for await (const c of process.stdin) chunks.push(c);
 	return Buffer.concat(chunks).toString("utf8");
 }
-const text = TEXT ?? (await readStdin());
+let text = TEXT ?? (await readStdin());
 if (!text) die("empty text (no --text, no stdin)");
 log.debug("text source", { source: TEXT !== undefined ? "--text" : "stdin", length: text.length });
 
+// ---------------------------------------------------------------------------
+// Input length guard.
+//
+// OpenAI's `/v1/audio/speech` limits `input` to **2000 tokens** (not
+// 4096 chars — that's a stale figure in some older docs). The token
+// count depends on the text; for mixed Cantonese/English it's
+// roughly 1.5–1.7 chars per token, so 3000 chars is a safe
+// budget for the worst-case CJK text. The 4897-char reply that
+// triggered the 2026-08-21 bug would have been ~3000 tokens.
+//
+// We also retry with halved input if OpenAI still rejects with a
+// token-limit error — useful for English-heavy text where 3000
+// chars is way under the limit, or for Chinese where it's slightly
+// over.
+//
+// `--max-chars 0` disables the guard entirely (will likely fail
+// at the API for any non-trivial input).
+// `--max-attempts N` overrides the retry count (default 3).
+// ---------------------------------------------------------------------------
+
+const MAX_CHARS_DEFAULT = 3000;
+const MAX_CHARS_RAW = getArg("max-chars");
+const MAX_CHARS = MAX_CHARS_RAW === undefined ? MAX_CHARS_DEFAULT : Number(MAX_CHARS_RAW);
+if (Number.isNaN(MAX_CHARS) || MAX_CHARS < 0) {
+	die(`--max-chars must be a non-negative number (got ${JSON.stringify(MAX_CHARS_RAW)})`);
+}
+const MAX_ATTEMPTS = Number(getArg("max-attempts") ?? "3");
+if (Number.isNaN(MAX_ATTEMPTS) || MAX_ATTEMPTS < 1) {
+	die(`--max-attempts must be a positive integer (got ${JSON.stringify(getArg("max-attempts"))})`);
+}
+log.debug("guard config", { maxChars: MAX_CHARS, maxAttempts: MAX_ATTEMPTS });
+
+if (MAX_CHARS > 0 && text.length > MAX_CHARS) {
+	const original = text;
+	const truncated = truncateAtBoundary(text, MAX_CHARS);
+	text = truncated.text;
+	log.warn("input truncated", {
+		originalChars: original.length,
+		truncatedChars: text.length,
+		cutAt: truncated.cutAt,
+		maxChars: MAX_CHARS,
+		boundary: truncated.boundary,
+	});
+}
+
 body.input = text;
+
+function truncateAtBoundary(s, max) {
+	if (s.length <= max) return { text: s, cutAt: s.length, boundary: "none" };
+	const window = s.slice(0, max);
+	// Prefer the last sentence-ending punctuation. CJK terminators
+	// (。！？) are always sentence ends in their own right; ASCII
+	// ones (.!?) need a following whitespace to disambiguate "1.5"
+	// and "U.S.A.".
+	const cjkSentence = /[。！？]/g;
+	let lastSentenceEnd = -1;
+	let m;
+	while ((m = cjkSentence.exec(window)) !== null) {
+		lastSentenceEnd = m.index + 1; // CJK terminator is always a boundary
+	}
+	if (lastSentenceEnd > 0) {
+		return {
+			text: window.slice(0, lastSentenceEnd).trimEnd() + "…",
+			cutAt: lastSentenceEnd,
+			boundary: "sentence",
+		};
+	}
+	const asciiSentence = /[.!?]/g;
+	while ((m = asciiSentence.exec(window)) !== null) {
+		const after = window[m.index + 1];
+		if (after === undefined || /\s/.test(after)) {
+			lastSentenceEnd = m.index + 1;
+		}
+	}
+	if (lastSentenceEnd > 0) {
+		return {
+			text: window.slice(0, lastSentenceEnd).trimEnd() + "…",
+			cutAt: lastSentenceEnd,
+			boundary: "sentence",
+		};
+	}
+	// Fall back to the last whitespace (avoid mid-word cuts).
+	const lastWs = window.search(/\s\S*$/);
+	if (lastWs > 0) {
+		return {
+			text: window.slice(0, lastWs).trimEnd() + "…",
+			cutAt: lastWs,
+			boundary: "word",
+		};
+	}
+	// Hard truncate.
+	return { text: window.trimEnd() + "…", cutAt: max, boundary: "hard" };
+}
 
 // ============================================================================
 // Auth
@@ -358,18 +450,40 @@ log.info("synthesizing", {
 	hasInstructions: typeof body.instructions === "string" && body.instructions.length > 0,
 });
 
+// POST with retry on input-too-long errors. The 2000-token limit is
+// approximate for our purposes (we don't have a tokenizer); on a 400
+// mentioning the limit, halve the input and try again.
 let bytesWritten;
-try {
-	bytesWritten = await postBinary(HOST, URL_PATH, JSON.stringify(body), OUT);
-} catch (e) {
-	const m = e.message || String(e);
-	// Distinguish network from HTTP-from-API errors by message prefix.
-	if (m.startsWith("HTTP ")) {
-		log.error("http error", { error: m });
-	} else {
-		log.error("network error", { error: m });
+let currentInput = body.input;
+let attempt = 0;
+while (true) {
+	attempt++;
+	const payload = { ...body, input: currentInput };
+	try {
+		bytesWritten = await postBinary(HOST, URL_PATH, JSON.stringify(payload), OUT);
+		if (attempt > 1) {
+			log.info("ok on retry", { attempt, finalChars: currentInput.length, totalDurationMs: Date.now() - startedAt });
+		}
+		break;
+	} catch (e) {
+		const m = e.message || String(e);
+		const isHttp = m.startsWith("HTTP ");
+		const isOverLimit = isHttp && (m.includes("over the maximum input limit") || m.includes("maximum context length"));
+		if (isOverLimit && attempt < MAX_ATTEMPTS) {
+			const newLen = Math.max(50, Math.floor(currentInput.length / 2));
+			const next = truncateAtBoundary(currentInput, newLen);
+			log.warn("input too long, retrying with smaller input", {
+				attempt,
+				oldChars: currentInput.length,
+				newChars: next.text.length,
+			});
+			currentInput = next.text;
+			continue;
+		}
+		if (isHttp) log.error("http error", { error: m });
+		else log.error("network error", { error: m });
+		process.exit(3);
 	}
-	process.exit(3);
 }
 
 const durationMs = Date.now() - startedAt;

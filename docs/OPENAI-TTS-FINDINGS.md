@@ -1,6 +1,11 @@
 # OpenAI `/v1/audio/speech` — Endpoint Findings & Code Nuances
 
 Investigation date: 2026-08-20
+Last updated: 2026-08-21 — corrected the input limit. Earlier "4096 chars" was wrong; the
+real limit is 2000 tokens. The 2026-08-21 incident (a 4897-char mixed Cantonese/English
+reply was rejected as 2484 tokens) exposed the discrepancy. §5, §8, §10, §13 footgun 2
+updated. `scripts/tts-openai.mjs` now defaults to `--max-chars 3000` and auto-retries
+on the token-limit error.
 Source: <https://platform.openai.com/docs/guides/text-to-speech>, <https://platform.openai.com/docs/api-reference/audio/createSpeech>
 Context: bridged through `pi-telegram` (Telegram bot wrapper). Voice replies go to a Telegram
 user via `sendVoice` (which only accepts `.ogg`/`.opus`). This doc records what works, what
@@ -73,10 +78,10 @@ Content-Type: application/json
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `input` | string | yes | Max **4096 chars** (the docs say 4096, but 4097 is silently accepted; 5000+ returns 400). The error is `string_too_long` with `max_length: 4096`. |
+| `input` | string | yes | Max **2000 tokens** (the older "4096 chars" figure is misleading — what actually limits is the tokenizer count). Verified 2026-08-21: a 4071-char mixed Cantonese/English reply was rejected as "Input of 2484 tokens is over the maximum input limit of 2000 tokens". Mixed text runs roughly 1.5–1.7 chars/token; 3000 chars is a safe budget for the worst-case CJK text. See §5. |
 | `model` | enum | yes | One of `tts-1`, `tts-1-hd`, `gpt-4o-mini-tts`, `gpt-4o-mini-tts-2025-12-15`. See §3. |
 | `voice` | enum | yes | One of 13 voices (9 for `tts-1`/`tts-1-hd`, 13 for `gpt-4o-mini-tts`). See §4. |
-| `instructions` | string | no | Max 4096 chars. **Ignored on `tts-1` and `tts-1-hd`** (silently — the field is accepted but has no effect, see §5). |
+| `instructions` | string | no | Max unknown (likely 2000 tokens per the same tokenizer cap; not specifically tested at limit). **Ignored on `tts-1` and `tts-1-hd`** (silently — the field is accepted but has no effect, see §5). |
 | `response_format` | enum | no | One of `mp3` (default), `opus`, `aac`, `flac`, `wav`, `pcm`. See §6. |
 | `speed` | number | no | Range **0.25–4.0**, default 1.0. Out-of-range returns 400 `less_than_equal`. See §5. |
 | `stream_format` | enum | no | `sse` or `audio`. **`sse` is not supported for `tts-1` / `tts-1-hd`**. For non-streaming, omit the field. See §9. |
@@ -163,13 +168,25 @@ silence patterns. All are valid OGG/Opus.
 
 ### `input` (string, required)
 
-Max 4096 chars per the docs. Verified:
-- 4096 chars: 200 OK, 7.4MB output
-- 4097 chars: 200 OK (API is lenient on the +1 boundary)
-- 5000 chars: 400 Bad Request, `string_too_long` with `max_length: 4096`
+Max **2000 tokens** (verified 2026-08-21). The older "4096 chars" figure on some OpenAI
+docs is misleading — what actually limits is the tokenizer count, not the raw char count.
+Token density varies by language:
 
-**The error message says `max_length: 4096` but the API is lenient by ~1 char.** For
-production code, hard-cap at 4096 and chunk longer inputs.
+- **Mixed Cantonese/English**: ~1.5–1.7 chars/token. The 4897-char reply that
+  triggered the 2026-08-21 bug had ~3000 tokens, well over the 2000 limit.
+- **English-only**: ~4 chars/token. 2000 tokens ≈ 8000 chars.
+- **Pure CJK (Mandarin/Japanese/Korean)**: ~1–1.5 chars/token. 2000 tokens ≈ 2000–3000 chars.
+
+Verified 2026-08-21:
+- 2484 tokens (from a 4071-char mixed reply): 400, `Input of 2484 tokens is over the maximum input limit of 2000 tokens`
+- 1729 chars (estimated ~1100 tokens): 200 OK
+- 3361 chars (estimated ~2100 tokens): 200 OK (just under the limit)
+
+**Hard cap at 3000 chars for mixed Cantonese/English** (safe budget). On 400 with
+the token-limit error, the `scripts/tts-openai.mjs` script auto-halves and retries
+up to `--max-attempts` (default 3). Set `--max-chars 0` to disable the guard entirely
+(not recommended). The script's stderr will surface the truncation, retry, and
+final outcome.
 
 ### `voice` (enum, required)
 
@@ -182,7 +199,7 @@ for the chosen model:
 
 (The error message is generated from the *model's* valid voice list, not the global 13.)
 
-### `instructions` (string, optional, max 4096)
+### `instructions` (string, optional, max unknown — likely 2000 tokens per the same tokenizer cap; not tested at the limit)
 
 **The single most important finding of this doc.** Controls accent, emotional range,
 intonation, impressions, speed of speech, tone, whispering. The docs say
@@ -308,9 +325,9 @@ Mandarin.)
 
 | Limit | Value | Verified |
 |---|---|---|
-| Max `input` length | 4096 chars | ✅ (4097 accepted, 5000 rejected) |
+| Max `input` length | **2000 tokens** (not 4096 chars — see §5 and §13 footgun 2) | ✅ (4071 chars / 2484 tokens rejected; 3361 chars / ~2100 tokens accepted) |
 | `speed` range | 0.25–4.0 | ✅ (0.5 and 4.0 work; 5.0 returns 400) |
-| `instructions` length | 4096 chars | (not tested at limit) |
+| `instructions` length | (not specifically tested — assume similar token limit; `scripts/tts-openai.mjs` does not pre-validate) | (unknown) |
 | Custom voices per org | 20 | (not applicable — we don't have access) |
 | Custom voice sample length | 30 sec | (not applicable) |
 | Rate limits | Per org, per model, per minute | (not tested — we hit the endpoint with a few dozen requests in this session, no throttling observed) |
@@ -334,7 +351,7 @@ For our `pi-openai-tts` extension, the non-streaming path is fine (the bridge's
 |---|---|---|
 | 200 | (binary body) | Success |
 | 400 | `enum` (in body) | Invalid enum value (e.g., unknown voice for the chosen model) |
-| 400 | `string_too_long` (max_length: 4096) | `input` > 4096 chars |
+| 400 | `Input of N tokens is over the maximum input limit of 2000 tokens` | `input` exceeds the 2000-token limit (char count varies by language; ~3000 chars is safe for mixed text) |
 | 400 | `less_than_equal` (le: 4.0) | `speed` > 4.0 |
 | 400 | `greater_than_equal` (ge: 0.25) | `speed` < 0.25 |
 | 401 | `invalid_api_key` | Missing or wrong `OPENAI_API_KEY` |
@@ -352,7 +369,8 @@ All error bodies are JSON: `{"error": {"message": "...", "type": "...", "param":
 | `model: "gpt-5-tts"` (invalid) | 404 `model_not_found` |
 | `model: "tts-1", voice: "ballad"` (ballad not in tts-1) | 400 `enum` listing valid voices |
 | `model: "tts-1", speed: 5.0` | 400 `less_than_equal` |
-| `model: "tts-1", input: <5000 chars>` | 400 `string_too_long` |
+| `model: "gpt-4o-mini-tts", input: 4071 chars (mixed Cantonese/English)` | 400 — "Input of 2484 tokens is over the maximum input limit of 2000 tokens" |
+| `model: "gpt-4o-mini-tts", input: 3361 chars (mixed)` | 200 OK (just under the 2000-token limit) |
 | `model: "tts-1", instructions: "..."` | 200 OK (silently ignored) |
 
 ---
@@ -373,7 +391,7 @@ All error bodies are JSON: `{"error": {"message": "...", "type": "...", "param":
 | Subtitle output | ❌ | ✅ (`subtitle_enable: true`, word/sentence level) |
 | Voice modification (post-processing) | ❌ | ✅ (`voice_modify: pitch, intensity, timbre, sound_effects`) |
 | Custom voice | ❌ (limited access, paid) | ✅ (voice cloning API at `/v1/voice_clone`) |
-| Max input | 4096 chars | 10000 chars (modern) / 500 chars (legacy) |
+| Max input | **2000 tokens** (≈3000 chars mixed, ≈8000 chars English, ≈2000–3000 chars pure CJK) | 10000 chars (modern) / 500 chars (legacy) |
 | Latency for short text | ~1-2 sec (Canton region) | ~2-3 sec (cn region, including ffmpeg rewrap) |
 | Cost | Pay per char (USD) | Pay per char (USD) |
 
@@ -409,9 +427,15 @@ designed for English.
    get language bias.** A caller that picks `tts-1` for cost reasons and passes
    `instructions` will be silently surprised when the output is Mandarin.
 
-2. **The "max input 4096" limit is enforced at exactly the 4096 boundary with
-   `string_too_long`, but the API is lenient by ~1 char on the +1 side.** Hard-cap
-   at 4096 in production code.
+2. **The actual input limit is 2000 tokens, not 4096 chars.** (The "4096" figure on
+   some OpenAI docs is misleading — the real gate is the tokenizer count.) On a
+   400 with "Input of N tokens is over the maximum input limit of 2000 tokens",
+   halve the input and retry. `scripts/tts-openai.mjs` does this automatically
+   (up to `--max-attempts` retries, default 3). Hard-cap at 3000 chars for mixed
+   Cantonese/English. Token density: ~1.5–1.7 chars/token mixed, ~4 chars/token
+   English, ~1–1.5 chars/token pure CJK. The earlier "API is lenient by ~1 char"
+   observation was wrong — that was at the char limit, before the actual token
+   limit kicked in.
 
 3. **Opus is a valid OGG/Opus container** (unlike MiniMax). 48kHz mono. No
    rewrap needed for Telegram. **Save the bytes as `.opus` (or rename to `.ogg`); the

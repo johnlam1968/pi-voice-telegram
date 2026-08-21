@@ -243,6 +243,47 @@ Auth (priority order):
   ~/.mmx/config.json            mmx-cli's canonical key store → `api_key` + `region`
 ```
 
+### CLI reference — `tts-openai.mjs` (OpenAI)
+
+```text
+Usage: tts-openai.mjs --out <path> [options]
+
+Required:
+  --out <path>                  path to write the decoded audio (the {mp3} placeholder)
+
+Source (one of):
+  --text "<string>"             the text to synthesize (test path)
+  (or read stdin)                the bridge's default — agent reply text
+
+Top-level:
+  --model <id>                  default: gpt-4o-mini-tts
+                                enum: gpt-4o-mini-tts, tts-1, tts-1-hd
+  --voice <id>                  default: coral
+                                13 voices for gpt-4o-mini-tts (alloy, ash, ballad, coral,
+                                  echo, fable, marin, nova, onyx, sage, shimmer, verse, cedar)
+                                9 voices for tts-1 / tts-1-hd (no ballad, cedar, marin, verse)
+  --response-format <id>        default: mp3
+                                enum: mp3, opus, aac, flac, wav, pcm
+  --speed <0.25..4.0>           default: 1
+  --instructions <string>       no default; only sent when set. Required for Cantonese
+                                on voices that fall back to English/Mandarin by default
+                                (e.g. "Speak in Cantonese." for gpt-4o-mini-tts)
+  --config <path>               full request body in JSON (overrides + extends; for
+                                forward-compat with fields the CLI doesn't cover)
+  --max-chars <n>               default: 3000. Hard-cap input length (chars) to stay under
+                                OpenAI's 2000-token limit. Set to 0 to disable (not
+                                recommended — the request will likely fail).
+  --max-attempts <n>            default: 3. Max retry count when OpenAI returns a
+                                token-limit error. On retry, input is halved at a
+                                sentence boundary.
+  --verbose / -v                DEBUG-level logging
+  PI_VOICE_TELEGRAM_DEBUG=1     same, via env
+
+Auth (priority order):
+  $OPENAI_API_KEY               env var (operator-set)
+  ~/.pi/agent/auth.json          → `openai.key` (the LLM key, reused for TTS)
+```
+
 ### Exit codes
 
 - `2` — caller config error (missing `--out`, missing API key, empty
@@ -302,17 +343,66 @@ echo "x" | tts-minimax.mjs --out /tmp/x.mp3 \
   --config /tmp/cfg.json --voice Cantonese_CuteGirl
 ```
 
-## OpenAI-compatible: inline cURL
+## OpenAI: the script
 
-OpenAI's `/v1/audio/speech` returns binary audio directly. No JSON parsing
-needed. The `telegram.json#outboundHandlers` template can be a one-line cURL
-+ ffmpeg pair, no script file required. The example above shows the full
-pipeline; the only knob worth parameterising per-call is the `{text}`
-placeholder, which the bridge substitutes from the agent's reply.
+`scripts/tts-openai.mjs` (~430 lines including comments). Pure Node.js
+(uses `https.request` and `node:fs`; no external dependencies).
+The OpenAI endpoint returns the audio BYTES DIRECTLY (no JSON, no
+hex) — much simpler than MiniMax. The next template step wraps the
+result in OGG/Opus via ffmpeg, the same as the MiniMax pipeline.
 
-For Cantonese specifically: use `gpt-4o-mini-tts` (not `tts-1` /
-`tts-1-hd`) and pass `instructions` to bias the language. See
-`docs/OPENAI-TTS-FINDINGS.md` §1 for the verified whisper round-trip.
+### Cantonese caveat
+
+Voices are English-optimized. For Cantonese, use:
+```
+--model gpt-4o-mini-tts --voice coral \
+  --instructions 'Speak in Cantonese.'
+```
+(verified in `docs/OPENAI-TTS-FINDINGS.md` §1.)
+
+### Input limit (IMPORTANT)
+
+OpenAI's `/v1/audio/speech` limits `input` to **2000 tokens** (not
+chars — the older "4096 chars" figure is misleading). Verified
+2026-08-21: a 4071-char mixed Cantonese/English reply was rejected as
+"Input of 2484 tokens is over the maximum input limit of 2000 tokens".
+Token density varies by language:
+- Mixed Cantonese/English: ~1.5–1.7 chars/token
+- English-only: ~4 chars/token
+- Pure CJK: ~1–1.5 chars/token
+
+The script defaults to `--max-chars 3000` (safe for the worst-case
+mixed CJK text). If OpenAI still rejects with a token-limit error
+during the request, the script **auto-halves the input and retries**
+up to `--max-attempts` (default 3) — so the bridge's `outboundHandlers`
+template never has to know about the limit. Set `--max-chars 0` to
+disable the guard entirely (not recommended; the request will likely
+fail for any non-trivial text).
+
+### 100% knob adjustability
+
+Every field in the OpenAI TTS request body is reachable via CLI flags:
+`--model`, `--voice`, `--response-format`, `--speed`, `--instructions`.
+`--config <json>` is also accepted for forward-compat with fields
+the CLI doesn't cover. Precedence: built-in defaults → `--config` → CLI.
+
+### Auth chain
+
+1. `$OPENAI_API_KEY` env var
+2. `~/.pi/agent/auth.json` → `openai.key` (the LLM key, reused for TTS)
+
+No smart default — won't talk to OpenAI without a key.
+
+### Error model (matches tts-minimax.mjs)
+
+- Exit 2 = caller config (missing `--out`, missing API key, empty
+  text, invalid enum, out-of-range numeric, malformed `--config` JSON)
+- Exit 3 = API / HTTP error (network, 4xx, 5xx — including the
+  token-limit error after `--max-attempts` retries are exhausted)
+- Exit 4 = write to `--out` failed
+
+The bridge's `recordTelegramRuntimeEvent` picks up non-zero exits
+and falls back to text delivery if no handler succeeds.
 
 ## Switching providers
 
