@@ -64,6 +64,18 @@ replies just work.
 | Pricing (operator cost) | MiniMax T2A rate card | OpenAI TTS rate card |
 | Auth | `MINIMAX_API_KEY` or `~/.mmx/config.json` | `OPENAI_API_KEY` or `~/.pi/agent/auth.json` |
 
+### Note: MiniMax has 3 other TTS endpoints (not used)
+
+MiniMax's `llms.txt` (the docs index) lists three additional TTS endpoints we don't currently integrate with. Both are listed here for reference; the integration cost is non-trivial because they don't fit the bridge's single-shot `outboundHandlers` model.
+
+| Endpoint | Limit | Why we don't use it today |
+|---|---|---|
+| **Sync WebSocket** (`/v1/t2a_ws_v2`) | 10000 chars | Same limit as the HTTP one, but the bridge's `execCommand` runs a single shell command. Adding WebSocket would require a small always-on client process. |
+| **WS Bidirectional** | char-by-char input | Real-time text streaming (type-as-you-speak). The bridge doesn't expose a streaming-input API today. |
+| **Async Long TTS** (`/v1/t2a_async_v2` + `/v1/query/t2a_async_query_v2` + `/v1/files/retrieve_content`) | **1,000,000 chars** | Two-phase workflow (create task → poll → download). Doesn't fit a single shell command. **This is the "batch" endpoint** for very long text — would let us handle arbitrarily long agent replies without the 10K HTTP cap. Would need a small wrapper script (a la `tts-minimax.mjs` but polling) plus a longer bridge `execCommand` timeout. |
+
+For the operator's current setup, the synchronous HTTP one (10K char limit) covers all observed agent replies (the largest was 4897 chars, well under the limit). The async path is a future option if/when we need to handle book-length text.
+
 For the operator's current setup (Cantonese agent on `pi-telegram`),
 **MiniMax is the better default** — `Cantonese_CuteGirl` is a native
 Cantonese voice and needs no `instructions` trick to stay in

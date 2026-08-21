@@ -2,6 +2,14 @@
 
 > Source: <https://platform.minimaxi.com/docs/api-reference/speech-t2a-http>
 > Copied: 2026-08-21
+> Last noted 2026-08-21: the llms.txt index at
+> <https://platform.minimax.io/docs/llms.txt> lists **three other** TTS
+> endpoints we don't use (sync WebSocket, WebSocket bidirectional, async
+> long-form `/v1/t2a_async_v2` with 1M-char limit). The async one is
+> the relevant "batch" endpoint for very long text but requires a
+> two-phase workflow (create → poll → download) that doesn't fit the
+> bridge's `outboundHandlers` synchronous command-template. Captured
+> in `TTS-VIA-OUTBOUND-HANDLERS.md` for future reference.
 > Format: the spec is YAML, wrapped in a code fence so it renders in
 > markdown. The fence is load-bearing; don't `cat` this file as YAML
 > directly.
