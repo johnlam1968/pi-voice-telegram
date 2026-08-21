@@ -101,6 +101,62 @@ export interface TtsResult {
 	metadata?: Record<string, unknown>;
 }
 
+/** A voice available from a `TtsProvider`. Providers implement
+ *  `listVoices()` (optional) so the operator can enumerate what's
+ *  installable / pickable. The shape is provider-agnostic; provider-
+ *  specific extras go in `metadata`.
+ *
+ *  The catalog is loaded lazily — `pi-openai-tts` ships a static
+ *  13-voice list, `pi-minimax-tts` loads `voices.json` (327
+ *  voices), and any future provider can return a network-fetched
+ *  list. The orchestrator and the `scripts/list-tts-voices.ts` CLI
+ *  tool both read from this method. */
+export interface TtsVoice {
+	/** Stable id used for the `voice` field of `TtsRequest` and
+	 *  the `voice` body parameter on the upstream API. */
+	readonly id: string;
+	/** Human-readable name (if the provider exposes one). */
+	readonly name?: string;
+	/** BCP-47 / ISO-639-1 language code (e.g., "yue", "en", "zh")
+	 *  or the provider's own language tag (e.g., MiniMax's
+	 *  "Mandarin", "Cantonese"). For MiniMax this is the English
+	 *  label; the Chinese label is in `metadata.languageKey`. */
+	readonly language?: string;
+	/** Free-text description (e.g., voice style, accent). */
+	readonly description?: string;
+	/** Which provider models this voice is available on. Empty /
+	 *  omitted means "all of the provider's models". For OpenAI,
+	 *  this is the set of SpeechModel strings; for MiniMax, all
+	 *  voices work with all `speech-2.x` and the legacy
+	 *  `speech-01`/`speech-02`. */
+	readonly models?: readonly string[];
+	/** Provider-specific metadata (e.g., MiniMax's `index` from
+	 *  the catalog, gender, sample URL, etc.). */
+	readonly metadata?: Record<string, unknown>;
+}
+
+/** A TTS provider. Implementations register themselves via
+ *  `registerTtsProvider(this)` at module load (not on `session_start`,
+ *  per the v0.3.1 STT load-order fix). The orchestrator
+ *  (`pi-telegram-tts-minimax/index.ts`) looks the configured provider
+ *  up by `id` at synthesis call time. */
+export interface TtsProvider {
+	/** Stable id, used as the value of `tts_provider` in the config. */
+	readonly id: string;
+	/** Human label, shown in the orchestrator's section UI picker. */
+	readonly label: string;
+	/** Synthesize `req.text` and return the audio path + optional
+	 *  metadata. Throw `TtsProviderError` on failure (the bridge
+	 *  records the error via `recordTelegramRuntimeEvent`). */
+	synthesize(req: TtsRequest): Promise<TtsResult>;
+	/** List available voices. Optional — providers that don't
+	 *  implement it (e.g., single-voice custom providers) are still
+	 *  valid. May be expensive for some providers (e.g., MiniMax's
+	 *  upstream `get_voice` call); the contract doesn't require
+	 *  caching, but providers SHOULD cache static lists. */
+	listVoices?(): Promise<readonly TtsVoice[]>;
+}
+
 /** Thrown by a provider when synthesis fails. `code` is the same
  *  taxonomy as `SttProvider` (1=usage, 2=network, 3=4xx, 4=5xx). */
 export class TtsProviderError extends Error {
@@ -118,17 +174,9 @@ export class TtsProviderError extends Error {
  *  `registerTtsProvider(this)` at module load (not on `session_start`,
  *  per the v0.3.1 STT load-order fix). The orchestrator
  *  (`pi-telegram-tts-minimax/index.ts`) looks the configured provider
- *  up by `id` at synthesis call time. */
-export interface TtsProvider {
-	/** Stable id, used as the value of `tts_provider` in the config. */
-	readonly id: string;
-	/** Human label, shown in the orchestrator's section UI picker. */
-	readonly label: string;
-	/** Synthesize `req.text` and return the audio path + optional
-	 *  metadata. Throw `TtsProviderError` on failure (the bridge
-	 *  records the error via `recordTelegramRuntimeEvent`). */
-	synthesize(req: TtsRequest): Promise<TtsResult>;
-}
+ *  up by `id` at synthesis call time. The new (optional)
+ *  `listVoices()` method lets the operator enumerate what's
+ *  available — see the canonical interface above. */
 
 // --- In-process registry, shared on globalThis (bridge-style) ---
 

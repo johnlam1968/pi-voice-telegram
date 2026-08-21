@@ -64,7 +64,7 @@ import {
 	type TtsResult,
 } from "../pi-telegram-tts-minimax/tts-provider.js";
 
-import { synthesize, MinimaxTtsError } from "./minimax-tts.js";
+import { synthesize, listVoices, MinimaxTtsError } from "./minimax-tts.js";
 
 const PROVIDER_ID = "pi-minimax-tts";
 
@@ -89,6 +89,13 @@ const minimaxProvider: TtsProvider = {
 				1,
 			);
 		}
+	},
+	// 327-voice catalog from the bundled `voices.json`. Cached at
+	// module scope after the first call. See ./minimax-tts.ts
+	// listVoices() and the catalog source notes for the §2a
+	// parens byte-trap and the §2b-bis ProfessionalHost stoplist.
+	async listVoices() {
+		return listVoices();
 	},
 };
 

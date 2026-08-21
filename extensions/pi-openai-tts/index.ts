@@ -44,7 +44,7 @@ import {
 	type TtsResult,
 } from "../pi-telegram-tts-minimax/tts-provider.js";
 
-import { synthesize, OpenAiTtsError } from "./openai-tts.js";
+import { synthesize, listVoices, OpenAiTtsError } from "./openai-tts.js";
 
 const PROVIDER_ID = "pi-openai-tts";
 
@@ -68,6 +68,11 @@ const openaiProvider: TtsProvider = {
 				1,
 			);
 		}
+	},
+	// Static 13-voice catalog (no upstream `list_voices` endpoint).
+	// See ./openai-tts.ts OPENAI_VOICES for the canonical list.
+	async listVoices() {
+		return listVoices();
 	},
 };
 

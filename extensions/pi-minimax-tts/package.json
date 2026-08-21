@@ -15,6 +15,7 @@
   },
   "files": [
     "*.ts",
+    "voices.json",
     "README.md"
   ],
   "peerDependencies": {

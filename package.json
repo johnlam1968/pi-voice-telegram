@@ -40,6 +40,9 @@
       "optional": true
     }
   },
+  "devDependencies": {
+    "jiti": "^2.4.0"
+  },
   "pi": {
     "extensions": ["./index.ts"]
   },

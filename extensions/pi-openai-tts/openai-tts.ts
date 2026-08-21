@@ -44,7 +44,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-import type { TtsRequest, TtsResult } from "../pi-telegram-tts-minimax/tts-provider.js";
+import type {
+	TtsRequest,
+	TtsResult,
+	TtsVoice,
+} from "../pi-telegram-tts-minimax/tts-provider.js";
 
 const DEFAULT_MODEL = "tts-1";
 const DEFAULT_VOICE = "alloy";
@@ -53,6 +57,125 @@ const DEFAULT_VOICE = "alloy";
 const DEFAULT_FORMAT = "opus";
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_SPEED = 1.0;
+
+/** Models that support `instructions` (gpt-4o-mini-tts family). The
+ *  tts-1 / tts-1-hd models accept the field but ignore it — see
+ *  docs/OPENAI-TTS-FINDINGS.md §5. */
+const INSTRUCTIONS_MODELS = new Set([
+	"gpt-4o-mini-tts",
+	"gpt-4o-mini-tts-2025-12-15",
+]);
+
+/** Static voice catalog. OpenAI does not expose a `list_voices`
+ *  endpoint, so the catalog is shipped as a constant. The
+ *  `models` field on each entry lists the SpeechModel strings the
+ *  voice is valid for; tts-1 / tts-1-hd use a 9-voice subset, all
+ *  voices work with gpt-4o-mini-tts. OpenAI recommends `marin` and
+ *  `cedar` for best quality (both gpt-4o-mini-tts only). */
+const OPENAI_VOICES: readonly TtsVoice[] = [
+	{
+		id: "alloy",
+		name: "Alloy",
+		language: "en",
+		description: "Balanced and clear; OpenAI's default voice.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "ash",
+		name: "Ash",
+		language: "en",
+		description: "Neutral and steady.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "ballad",
+		name: "Ballad",
+		language: "en",
+		description: "Soft and emotional; gpt-4o-mini-tts only.",
+		models: [...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "coral",
+		name: "Coral",
+		language: "en",
+		description: "Warm and friendly; OpenAI's Quickstart voice.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "echo",
+		name: "Echo",
+		language: "en",
+		description: "Deep and calm; male.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "fable",
+		name: "Fable",
+		language: "en",
+		description: "Warm and expressive; narrative.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "marin",
+		name: "Marin",
+		language: "en",
+		description: "High quality; OpenAI-recommended. gpt-4o-mini-tts only.",
+		models: [...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "cedar",
+		name: "Cedar",
+		language: "en",
+		description: "High quality; OpenAI-recommended. gpt-4o-mini-tts only.",
+		models: [...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "nova",
+		name: "Nova",
+		language: "en",
+		description: "Friendly and enthusiastic; female.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "onyx",
+		name: "Onyx",
+		language: "en",
+		description: "Authoritative and firm; male.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "sage",
+		name: "Sage",
+		language: "en",
+		description: "Calm and thoughtful.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "shimmer",
+		name: "Shimmer",
+		language: "en",
+		description: "Crisp and pleasant; female.",
+		models: ["tts-1", "tts-1-hd", ...INSTRUCTIONS_MODELS],
+	},
+	{
+		id: "verse",
+		name: "Verse",
+		language: "en",
+		description: "Expressive; gpt-4o-mini-tts only.",
+		models: [...INSTRUCTIONS_MODELS],
+	},
+].map((v) => ({
+	...v,
+	models: v.models, // TS readonly narrow
+})) as readonly TtsVoice[];
+
+/** List OpenAI's TTS voices. The list is static (no upstream
+ *  `list_voices` endpoint); the catalog above is the canonical
+ *  source. Returns all 13 voices regardless of model — callers
+ *  can filter by `voice.models.includes(model)`. */
+export async function listVoices(): Promise<readonly TtsVoice[]> {
+	return OPENAI_VOICES;
+}
 
 /** OpenAI's actual TTS API. */
 const OPENAI_TTS_BASE_URL = "https://api.openai.com/v1";

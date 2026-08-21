@@ -49,11 +49,16 @@
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { request as httpsRequest } from "node:https";
 import { randomUUID } from "node:crypto";
 
-import type { TtsRequest, TtsResult } from "../pi-telegram-tts-minimax/tts-provider.js";
+import type {
+	TtsRequest,
+	TtsResult,
+	TtsVoice,
+} from "../pi-telegram-tts-minimax/tts-provider.js";
 
 const DEFAULT_MODEL = "speech-2.8-hd";
 const DEFAULT_VOICE = "Cantonese_PlayfulMan";
@@ -673,4 +678,99 @@ export async function synthesize(req: TtsRequest): Promise<TtsResult> {
 			bytes: audio.data.length,
 		},
 	};
+}
+
+// --- Voice catalog (lazy-loaded, cached) -----------------------------------
+
+interface MiniMaxVoiceEntry {
+	index: number;
+	voiceId: string;
+	voiceName: string;
+	language: string;
+	languageKey: string;
+}
+
+interface MiniMaxVoiceCatalog {
+	version: string;
+	source: string;
+	lastUpdated: string;
+	count: number;
+	voices: MiniMaxVoiceEntry[];
+}
+
+/** Resolve the path to the bundled `voices.json` catalog. The catalog
+ *  is shipped alongside the source (see `package.json` `files`); we
+ *  resolve via `import.meta.url` so the path works whether the
+ *  package is loaded by jiti from source or by Node from
+ *  `node_modules/pi-minimax-tts/`. */
+function voicesCatalogPath(): string {
+	// jiti-loaded modules: `import.meta.url` is the resolved file://
+	// path of this source file. Walk up from `minimax-tts.ts` to
+	// the package root, then to `voices.json`.
+	const here = fileURLToPath(import.meta.url);
+	return join(dirname(here), "voices.json");
+}
+
+let cachedCatalog: MiniMaxVoiceCatalog | null = null;
+function loadCatalog(): MiniMaxVoiceCatalog {
+	if (cachedCatalog) return cachedCatalog;
+	const path = voicesCatalogPath();
+	if (!existsSync(path)) {
+		throw new MinimaxTtsError(
+			`minimax-tts: voices.json not found at ${path}; the catalog is bundled with the package — reinstall pi-minimax-tts`,
+			1,
+			{ path },
+		);
+	}
+	try {
+		const raw = readFileSync(path, "utf8");
+		const parsed = JSON.parse(raw) as MiniMaxVoiceCatalog;
+		if (!Array.isArray(parsed.voices)) {
+			throw new Error("voices.json: missing `voices` array");
+		}
+		cachedCatalog = parsed;
+		return parsed;
+	} catch (err) {
+		throw new MinimaxTtsError(
+			`minimax-tts: failed to parse voices.json: ${(err as Error).message}`,
+			1,
+			{ path },
+		);
+	}
+}
+
+/** List MiniMax T2A voices from the bundled catalog (327 voices
+ *  across 22 languages as of the 2026-08-17 catalog build). The
+ *  catalog is static — re-running this is just a `readFileSync` on
+ *  the bundled JSON, no upstream call. Cached at module scope
+ *  after the first call.
+ *
+ *  The returned `TtsVoice[]` is the provider-agnostic shape from
+ *  `pi-telegram-tts-minimax/tts-provider.ts`. Provider-specific
+ *  fields (`languageKey` = Chinese label, `index` = catalog position)
+ *  go in `metadata`. Voice ids are passed through byte-exact — see
+ *  `docs/MINIMAX-T2A-FINDINGS.md` §2a for the parens byte-trap
+ *  and §2b-bis for the ProfessionalHost stoplist. */
+export async function listVoices(): Promise<readonly TtsVoice[]> {
+	const catalog = loadCatalog();
+	return catalog.voices.map((v) => ({
+		id: v.voiceId,
+		name: v.voiceName,
+		language: v.language,
+		// languageKey is the Chinese label from the upstream catalog;
+		// keep it on `description` for visibility (English label is
+		// in `language`).
+		description: v.languageKey,
+		// All voices work with all `speech-2.x` and the legacy
+		// `speech-01`/`speech-02`. The §2a-byte-trap and §2b-bis-
+		// stoplist are runtime concerns; the catalog doesn't encode
+		// them.
+		models: ["speech-01", "speech-02", "speech-2.x"],
+		metadata: {
+			index: v.index,
+			languageKey: v.languageKey,
+			catalogVersion: catalog.version,
+			catalogSource: catalog.source,
+		},
+	}));
 }
