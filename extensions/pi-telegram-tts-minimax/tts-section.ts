@@ -39,6 +39,7 @@
 
 import type { TelegramSectionContext } from "@llblab/pi-telegram/sections";
 import { registerTelegramSection } from "@llblab/pi-telegram/sections";
+import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
 
 import { getTtsProvider, listTtsProviders, type TtsVoice } from "./tts-provider.js";
 import {
@@ -47,6 +48,31 @@ import {
 	saveTtsOrchestratorConfig,
 	saveTtsProviderField,
 } from "./tts-config.js";
+
+/** One-liner trace helper. Every button press in the section UI
+ *  records a runtime event under the "pi-telegram-tts-minimax/section"
+ *  category with the action + payload + the post-state. The events
+ *  are visible in /telegram-status --debug and in the bridge log
+ *  (logs.jsonl), so the operator can trace which button was
+ *  pressed and what changed. Keeps the section's existing
+ *  "pi-telegram-tts-minimax/tts" runtime events (synthesis
+ *  errors) separate from UI events ("pi-telegram-tts-minimax/section")
+ *  so they're easy to filter. */
+function trace(
+	action: string,
+	payload: string | undefined,
+	post: { tts_provider: string; voice?: string; model?: string },
+): void {
+	try {
+		recordTelegramRuntimeEvent(
+			"pi-telegram-tts-minimax/section",
+			new Error(`section.${action}`), // error slot holds the "what"
+			{ action, payload: payload ?? null, ...post },
+		);
+	} catch {
+		// Don't let a tracing failure break the section.
+	}
+}
 
 /** Section id (must be stable; re-registration under the same id
  *  updates the in-Telegram menu without minting a new token). */
@@ -241,12 +267,16 @@ async function handleSelectProvider(
 	const providers = listTtsProviders();
 	if (!providers.find((p) => p.id === providerId)) {
 		await ctx.answerCallback(`Provider "${providerId}" is not installed.`);
+		trace("select-provider", providerId, {
+			tts_provider: loadTtsOrchestratorConfig().tts_provider,
+		});
 		return "handled";
 	}
 	// Update orchestrator config. The hot-reload watcher in
 	// `./index.ts` picks this up within 200ms and re-registers the
 	// bridge's TTS provider with the new `tts_provider`.
 	saveTtsOrchestratorConfig({ tts_provider: providerId });
+	trace("select-provider", providerId, { tts_provider: providerId });
 	await ctx.answerCallback(`Switched to ${providerId}`);
 
 	// Re-render with the voice picker for the new provider so the
@@ -281,6 +311,10 @@ async function handleSelectVoice(
 	const provider = getTtsProvider(cfg.tts_provider);
 	if (!provider?.listVoices) {
 		await ctx.answerCallback("Active provider has no voice picker.");
+		trace("select-voice", voiceId, {
+			tts_provider: cfg.tts_provider,
+			voice: loadTtsProviderConfig(cfg.tts_provider).voice,
+		});
 		return "handled";
 	}
 	// Validate against the provider's voice list (byte-exact for
@@ -290,11 +324,20 @@ async function handleSelectVoice(
 		await ctx.answerCallback(
 			`"${voiceId}" is not a valid voice for ${cfg.tts_provider}.`,
 		);
+		trace("select-voice", voiceId, {
+			tts_provider: cfg.tts_provider,
+			voice: loadTtsProviderConfig(cfg.tts_provider).voice,
+		});
 		return "handled";
 	}
 	// Persist. The provider reads its config on every call, so
 	// this takes effect on the next voice reply.
 	saveTtsProviderField(cfg.tts_provider, "voice", voiceId);
+	const newProv = loadTtsProviderConfig(cfg.tts_provider);
+	trace("select-voice", voiceId, {
+		tts_provider: cfg.tts_provider,
+		voice: newProv.voice,
+	});
 	await ctx.answerCallback(`Voice: ${voiceId}`);
 	// Re-render the settings menu (provider picker) with the
 	// new voice marked.

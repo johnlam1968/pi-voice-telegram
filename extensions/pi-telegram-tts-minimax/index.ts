@@ -96,6 +96,23 @@ function buildSynthesisProvider(
 			return undefined;
 		}
 
+		// Trace: confirms the bridge invoked the orchestrator's
+		// provider at all. If you see "Failed to send voice reply"
+		// in the bridge log but NO event under
+		// "pi-telegram-tts-minimax/tts", the bridge is not calling
+		// our provider — something is wrong with registration
+		// (likely a separate pi process or hot-reload race).
+		recordTelegramRuntimeEvent(
+			"pi-telegram-tts-minimax/tts",
+			new Error("synthesize invoked"),
+			{
+				phase: "invoke",
+				ttsProviderId: cfg.tts_provider,
+				textLength: text.length,
+				lang: options?.lang ?? null,
+			},
+		);
+
 		const provider = getTtsProvider(cfg.tts_provider);
 		if (!provider) {
 			recordTelegramRuntimeEvent(
@@ -128,6 +145,21 @@ function buildSynthesisProvider(
 				transcriptText: synth.transcriptText ?? text,
 				language: synth.language,
 			};
+			// Trace: synthesis returned a valid result. Helps
+			// distinguish "provider returned garbage" from
+			// "provider threw" in the bridge log.
+			recordTelegramRuntimeEvent(
+				"pi-telegram-tts-minimax/tts",
+				new Error("synthesize ok"),
+				{
+					phase: "ok",
+					providerId: provider.id,
+					audioPath: result.audioPath,
+					textLength: text.length,
+					durationMs: synth.durationMs ?? null,
+					metadata: synth.metadata ?? null,
+				},
+			);
 		} catch (err) {
 			recordTelegramRuntimeEvent(
 				"pi-telegram-tts-minimax/tts",
