@@ -75,6 +75,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
+import { makeLogger } from "../_logger.js";
+
+const log = makeLogger("pi-openai-stt/http");
+
 export interface OpenAiSttArgs {
 	/** Path to the audio file on disk. */
 	inputPath: string;
@@ -306,12 +310,14 @@ async function transcribeAtBaseUrl(
 	} catch (err) {
 		clearTimeout(timer);
 		if ((err as Error).name === "AbortError") {
+			log.error("timeout", { baseUrl, url, timeoutMs });
 			throw new OpenAiSttError(
 				`openai-stt: timeout after ${timeoutMs}ms`,
 				2,
 				{ baseUrl, url },
 			);
 		}
+		log.error("network error", { baseUrl, url, error: (err as Error).message });
 		throw new OpenAiSttError(
 			`openai-stt: network error: ${(err as Error).message}`,
 			2,
@@ -319,9 +325,11 @@ async function transcribeAtBaseUrl(
 		);
 	}
 	clearTimeout(timer);
+	log.debug("http response", { baseUrl, status: res.status, ok: res.ok });
 
 	if (!res.ok) {
 		const detail = (await res.text().catch(() => "")).slice(0, 500);
+		log.error("http non-2xx", { baseUrl, status: res.status, detail: detail.slice(0, 200) });
 		throw new OpenAiSttError(
 			`openai-stt: HTTP ${res.status} from ${url}\n${detail}`,
 			res.status >= 500 ? 4 : 3,

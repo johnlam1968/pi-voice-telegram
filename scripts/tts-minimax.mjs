@@ -45,6 +45,62 @@ import { homedir } from "node:os";
 import { request as httpsRequest } from "node:https";
 
 // ============================================================================
+// Logger
+// ============================================================================
+//
+// Single-line structured stderr log. The bridge's execCommand captures
+// stderr, so each call leaves a paper trail. The bridge's own log file
+// is occasionally stale (a separate bridge-side bug, not this script's),
+// so this script's stderr is the canonical record of what happened.
+//
+// Levels: DEBUG (only with --verbose/-v), INFO (default), WARN, ERROR.
+// Format: <iso-ts> [<LEVEL>] [tts-minimax] <msg> [k=v k=v ...]
+//
+// Set PI_VOICE_TELEGRAM_DEBUG=1 to force DEBUG on (handy when the script
+// is invoked from the bridge and you can't pass --verbose).
+
+function argv_() {
+	return process.argv.slice(2);
+}
+
+const VERBOSE =
+	argv_().includes("-v") ||
+	argv_().includes("--verbose") ||
+	process.env.PI_VOICE_TELEGRAM_DEBUG === "1";
+
+const LOG_LEVELS = { DEBUG: 10, INFO: 20, WARN: 30, ERROR: 40 };
+const LOG_THRESHOLD = VERBOSE ? LOG_LEVELS.DEBUG : LOG_LEVELS.INFO;
+
+function fmtFields(fields) {
+	if (!fields) return "";
+	const parts = [];
+	for (const [k, v] of Object.entries(fields)) {
+		if (v === undefined || v === null) continue;
+		const s = typeof v === "string" ? v : JSON.stringify(v);
+		parts.push(`${k}=${s.length > 200 ? s.slice(0, 200) + "…" : s}`);
+	}
+	return parts.length ? " " + parts.join(" ") : "";
+}
+
+function logAt(level, msg, fields) {
+	if (LOG_LEVELS[level] < LOG_THRESHOLD) return;
+	const ts = new Date().toISOString();
+	const tag = `[${level}] [tts-minimax]`;
+	process.stderr.write(`${ts} ${tag} ${msg}${fmtFields(fields)}\n`);
+}
+
+const log = {
+	debug: (msg, fields) => logAt("DEBUG", msg, fields),
+	info: (msg, fields) => logAt("INFO", msg, fields),
+	warn: (msg, fields) => logAt("WARN", msg, fields),
+	error: (msg, fields) => logAt("ERROR", msg, fields),
+};
+
+if (VERBOSE) {
+	log.debug("verbose mode enabled", { argv: process.argv.slice(2).join(" ") });
+}
+
+// ============================================================================
 // CLI parsing
 // ============================================================================
 
@@ -274,6 +330,7 @@ if (configPath !== undefined) {
 		die(`--config ${configPath}: expected a JSON object`);
 	}
 	deepMerge(body, configObj);
+	log.debug("config merged from file", { path: configPath, keys: Object.keys(configObj) });
 }
 
 // CLI: positive boolean flags
@@ -345,6 +402,7 @@ function validateBody(b) {
 }
 
 validateBody(body);
+log.debug("request body assembled", { body });
 
 // ============================================================================
 // Streaming is not implemented in this script — it requires a different
@@ -368,6 +426,7 @@ if (body.stream === true) {
 
 const OUT = getArg("out");
 if (!OUT) die("missing --out <path>");
+log.debug("out path", { out: OUT });
 
 const TEXT = getArg("text");
 async function readStdin() {
@@ -377,6 +436,7 @@ async function readStdin() {
 }
 const text = TEXT ?? (await readStdin());
 if (!text) die("empty text (no --text, no stdin)");
+log.debug("text source", { source: TEXT !== undefined ? "--text" : "stdin", length: text.length });
 
 body.text = text;
 
@@ -416,6 +476,12 @@ const HOST = process.env.MINIMAX_BASE_URL
 	: REGION === "global"
 		? "api.minimax.io"
 		: "api.minimaxi.com";
+log.debug("auth resolved", {
+	apiKeySource: process.env.MINIMAX_API_KEY ? "env" : "~/.mmx/config.json",
+	region: REGION,
+	host: HOST,
+	baseUrlOverride: process.env.MINIMAX_BASE_URL ?? null,
+});
 
 // ============================================================================
 // POST
@@ -453,18 +519,22 @@ function postJson(host, urlPath, payload) {
 	});
 }
 
+const startedAt = Date.now();
+log.info("synthesizing", { host: HOST, model: body.model, voice: body.voice_setting?.voice_id, lang: body.language_boost, textChars: text.length });
+
 let resp;
 try {
 	resp = await postJson(HOST, "/v1/t2a_v2", JSON.stringify(body));
 } catch (e) {
-	process.stderr.write(`tts-minimax.mjs: network error: ${e.message}\n`);
+	log.error("network error", { host: HOST, error: e.message });
 	process.exit(3);
 }
 
+log.debug("http response", { status: resp.status, bytes: resp.body.length, contentType: resp.contentType });
+
 if (resp.status < 200 || resp.status >= 300) {
-	process.stderr.write(
-		`tts-minimax.mjs: HTTP ${resp.status} from ${HOST}/v1/t2a_v2\n${resp.body.toString("utf8").slice(0, 500)}\n`,
-	);
+	const detail = resp.body.toString("utf8").slice(0, 500);
+	log.error("http non-2xx", { status: resp.status, host: HOST, detail });
 	process.exit(3);
 }
 
@@ -477,23 +547,20 @@ try {
 	data = JSON.parse(resp.body.toString("utf8"));
 } catch (e) {
 	const head = resp.body.toString("utf8").slice(0, 200) || "(empty)";
-	process.stderr.write(`tts-minimax.mjs: non-JSON response (${e.message}): ${head}\n`);
+	log.error("non-JSON response", { error: e.message, head });
 	process.exit(3);
 }
+log.debug("parsed response", { keys: Object.keys(data) });
 
 const base = data.base_resp;
 if (base && typeof base.status_code === "number" && base.status_code !== 0) {
-	process.stderr.write(
-		`tts-minimax.mjs: upstream error status_code=${base.status_code}: ${base.status_msg ?? "(no message)"}\n`,
-	);
+	log.error("upstream error", { status_code: base.status_code, status_msg: base.status_msg ?? "(no message)" });
 	process.exit(3);
 }
 
 const audioHex = data.data?.audio ?? data.audio;
 if (!audioHex) {
-	process.stderr.write(
-		`tts-minimax.mjs: no audio in response (keys: ${Object.keys(data).join(", ")})\n`,
-	);
+	log.error("no audio in response", { keys: Object.keys(data) });
 	process.exit(3);
 }
 
@@ -504,14 +571,18 @@ if (!audioHex) {
 try {
 	writeFileSync(OUT, Buffer.from(audioHex, "hex"));
 } catch (e) {
-	process.stderr.write(`tts-minimax.mjs: write ${OUT} failed: ${e.message}\n`);
+	log.error("write failed", { out: OUT, error: e.message });
 	process.exit(4);
 }
 
-// One-line stderr summary for /telegram-status --debug
 const extra = data.extra_info ?? {};
-process.stderr.write(
-	`tts-minimax.mjs: ok trace_id=${data.trace_id ?? "?"} ` +
-		`audio_length_ms=${extra.audio_length ?? "?"} ` +
-		`bytes=${audioHex.length / 2 | 0} → ${OUT}\n`,
-);
+const durationMs = Date.now() - startedAt;
+log.info("ok", {
+	trace_id: data.trace_id ?? "?",
+	audio_length_ms: extra.audio_length ?? "?",
+	bytes: audioHex.length / 2 | 0,
+	durationMs,
+	out: OUT,
+	model: body.model,
+	voice: body.voice_setting?.voice_id,
+});

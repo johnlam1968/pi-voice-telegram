@@ -45,7 +45,11 @@ import {
 	ProviderError,
 } from "./stt-provider.js";
 
+import { makeLogger } from "../_logger.js";
+
 import type { EchoConfig } from "./telegram-config.js";
+
+const log = makeLogger("pi-telegram-echo/stt");
 
 /** chat-id-by-filename map. Populated by the update handler, consumed
  *  by the STT provider. Cleaned up in the provider's `finally` after
@@ -124,6 +128,7 @@ export async function handleTelegramUpdateForEcho(
 	const ext = guessExtensionFromMime(attachment.mime_type, isVoice ? ".ogg" : ".mp3");
 	const fileName = `${isVoice ? "voice" : "audio"}-${msg.message_id}${ext}`;
 	chatIdByFileName.set(fileName, msg.chat.id);
+	log.info("inbound stashed", { fileName, chatId: msg.chat.id, isVoice, mime: attachment.mime_type, sizeBytes: attachment.file_size });
 
 	return "pass";
 }
@@ -145,6 +150,10 @@ async function transcribeAndMaybeEcho(
 
 	const provider = getSttProvider(sttProviderId);
 	if (!provider) {
+		log.warn("STT provider not registered", {
+			wanted: sttProviderId,
+			installed: listSttProviders().map((p) => p.id),
+		});
 		recordTelegramRuntimeEvent(
 			"pi-telegram-echo/stt",
 			new Error(
@@ -156,6 +165,7 @@ async function transcribeAndMaybeEcho(
 		);
 		return undefined;
 	}
+	log.info("transcribe start", { provider: provider.id, file: file.fileName, lang: options?.language ?? process.env.PI_TELEGRAM_LANG });
 
 	let transcript: string;
 	try {
@@ -166,6 +176,9 @@ async function transcribeAndMaybeEcho(
 			})
 		).trim();
 	} catch (err) {
+		const code = err instanceof ProviderError ? err.code : undefined;
+		const detail = err instanceof ProviderError ? err.detail : undefined;
+		log.error("transcribe failed", { provider: provider.id, code, detail: detail ? JSON.stringify(detail) : undefined, error: err instanceof Error ? err.message : String(err) });
 		recordTelegramRuntimeEvent(
 			"pi-telegram-echo/stt",
 			err instanceof Error ? err : new Error(String(err)),
@@ -179,7 +192,11 @@ async function transcribeAndMaybeEcho(
 		);
 		return undefined;
 	}
-	if (!transcript) return undefined;
+	if (!transcript) {
+		log.warn("transcribe returned empty", { provider: provider.id });
+		return undefined;
+	}
+	log.info("transcribe ok", { provider: provider.id, chars: transcript.length });
 
 	// Best-effort 🎙️ echo. Failure here does NOT fail the
 	// transcription — the agent still gets the transcript via the
@@ -195,7 +212,9 @@ async function transcribeAndMaybeEcho(
 					},
 					{ scope: { kind: "target", target: { chatId } } },
 				);
+				log.info("echo sent", { chatId, chars: transcript.length });
 			} catch (err) {
+				log.error("echo send failed", { chatId, error: err instanceof Error ? err.message : String(err) });
 				recordTelegramRuntimeEvent(
 					"pi-telegram-echo/echo",
 					err instanceof Error ? err : new Error(String(err)),
@@ -204,7 +223,11 @@ async function transcribeAndMaybeEcho(
 			} finally {
 				chatIdByFileName.delete(file.fileName);
 			}
+		} else {
+			log.warn("echo enabled but no chatId stashed", { file: file.fileName });
 		}
+	} else {
+		log.debug("echo disabled, skipping", { file: file.fileName });
 	}
 
 	return options?.language

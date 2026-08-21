@@ -55,14 +55,20 @@ import {
 
 import { transcribe, OpenAiSttError } from "./openai-stt.js";
 
+import { makeLogger } from "../_logger.js";
+
+const log = makeLogger("pi-openai-stt");
 const PROVIDER_ID = "pi-openai-stt";
 
 const openaiProvider: SttProvider = {
 	id: PROVIDER_ID,
 	label: "🟢 OpenAI (any compatible)",
 	async transcribe(req: SttRequest): Promise<string> {
+		log.info("transcribe start", { file: req.inputPath, lang: req.lang });
 		try {
-			return await transcribe({ inputPath: req.inputPath, lang: req.lang });
+			const text = await transcribe({ inputPath: req.inputPath, lang: req.lang });
+			log.info("transcribe ok", { chars: text.length });
+			return text;
 		} catch (err) {
 			// Re-throw as `ProviderError` so the bridge's runtime-event
 			// handler sees the same `code: 1|2|3|4` taxonomy as the
@@ -71,8 +77,14 @@ const openaiProvider: SttProvider = {
 			// keep the `ProviderError` brand for the registry
 			// contract.
 			if (err instanceof OpenAiSttError) {
+				log.error("transcribe failed", {
+					code: err.code,
+					detail: err.detail ? JSON.stringify(err.detail) : undefined,
+					error: err.message,
+				});
 				throw new ProviderError(err.message, err.code, err.detail);
 			}
+			log.error("transcribe failed (unwrapped)", { error: err instanceof Error ? err.message : String(err) });
 			throw new ProviderError(
 				err instanceof Error ? err.message : String(err),
 				1,
@@ -89,24 +101,31 @@ const openaiProvider: SttProvider = {
 // registry still holds the entry, and we re-register.
 try {
 	registerSttProvider(openaiProvider);
-} catch {
+	log.info("registered at module load");
+} catch (e) {
+	log.warn("register at module load failed, retrying after unregister", { error: e instanceof Error ? e.message : String(e) });
 	unregisterSttProvider(PROVIDER_ID);
 	registerSttProvider(openaiProvider);
+	log.info("registered at module load (after retry)");
 }
 
 export default function piOpenaiStt(pi: ExtensionAPI): void {
 	pi.on("session_start", () => {
+		log.info("session_start");
 		// No-op: the provider is already registered at module load.
 		// The handler is defensive — re-registration is idempotent
 		// (the try/unwrap above handles the duplicate-id case).
 		try {
 			registerSttProvider(openaiProvider);
+			log.debug("re-registered on session_start");
 		} catch {
 			// Already registered; ignore.
+			log.debug("already registered, skip re-register");
 		}
 	});
 
 	pi.on("session_shutdown", () => {
+		log.info("session_shutdown");
 		unregisterSttProvider(PROVIDER_ID);
 	});
 }

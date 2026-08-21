@@ -225,6 +225,30 @@ Auth (priority order):
 The bridge's `recordTelegramRuntimeEvent` picks up non-zero exits and
 falls back to text delivery if no handler succeeds.
 
+### Logging
+
+Every run prints structured lines to **stderr** (the bridge's `execCommand`
+captures these into the runtime event log):
+
+```text
+2026-08-21T20:57:04.124Z [DEBUG] [tts-minimax] verbose mode enabled argv=--out /tmp/x.mp3 --verbose
+2026-08-21T20:57:04.124Z [DEBUG] [tts-minimax] request body assembled body={"model":"speech-2.8-hd",...}
+2026-08-21T20:57:04.130Z [DEBUG] [tts-minimax] text source source=stdin length=7
+2026-08-21T20:57:04.130Z [DEBUG] [tts-minimax] auth resolved apiKeySource=~/.mmx/config.json region=cn host=api.minimaxi.com
+2026-08-21T20:57:04.130Z [INFO]  [tts-minimax] synthesizing host=api.minimaxi.com model=speech-2.8-hd voice=Cantonese_CuteGirl lang=Chinese,Yue textChars=7
+2026-08-21T20:57:06.085Z [DEBUG] [tts-minimax] http response status=200 bytes=41790 contentType=application/json
+2026-08-21T20:57:06.086Z [DEBUG] [tts-minimax] parsed response keys=["data","extra_info","trace_id","base_resp"]
+2026-08-21T20:57:06.086Z [INFO]  [tts-minimax] ok trace_id=06d7eea1fb4c8f4618114c059b070f5e audio_length_ms=1188 bytes=20724 durationMs=1956 out=/tmp/x.mp3
+```
+
+Levels: **DEBUG** (only with `--verbose` / `-v` or `PI_VOICE_TELEGRAM_DEBUG=1`),
+**INFO** (default), **WARN**, **ERROR**. Format:
+`<iso-ts> [<LEVEL>] [tts-minimax] <msg> [k=v k=v ...]`.
+
+This is the canonical observability channel for the script — the
+bridge's own runtime-event log file (`~/.pi/agent/tmp/telegram/logs.jsonl`)
+is occasionally stale or frozen, so don't rely on it for TTS diagnostics.
+
 ### Worked examples
 
 ```bash

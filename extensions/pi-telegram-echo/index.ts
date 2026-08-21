@@ -166,9 +166,12 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
+import { makeLogger } from "../_logger.js";
 import { registerEchoHandlers } from "./echo-handler.js";
 import { registerEchoSection } from "./echo-section.js";
 import { loadEchoConfig } from "./telegram-config.js";
+
+const log = makeLogger("pi-telegram-echo");
 
 export default function piTelegramEcho(pi: ExtensionAPI): void {
 	let handlerDisposers: Array<() => void> = [];
@@ -189,14 +192,19 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 	/** Re-register the handlers so the provider closure picks up
 	 *  the new `echoEnabled` and `stt_provider`. */
 	const reconfigureHandlers = (): void => {
+		const cfg = loadEchoConfig();
+		log.info("reconfigure handlers", { echoEnabled: cfg.echoEnabled, sttProvider: cfg.stt_provider });
 		handlerDisposers.forEach((d: () => void) => d());
 		handlerDisposers = [];
-		handlerDisposers.push(...registerEchoHandlers(loadEchoConfig()));
+		handlerDisposers.push(...registerEchoHandlers(cfg));
 	};
 
 	const startConfigWatcher = (): void => {
 		if (configWatcher) return;
-		if (!existsSync(configPath)) return;
+		if (!existsSync(configPath)) {
+			log.warn("config not found, skipping watcher", { path: configPath });
+			return;
+		}
 		const configDir = dirname(configPath);
 		const baseName = configPath.slice(configDir.length + 1);
 		try {
@@ -210,6 +218,7 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 					// every sibling write (sessions, logs, state)
 					// and waste a reconfigure.
 					if (filename !== baseName) return;
+					log.debug("telegram.json changed", { filename });
 					if (reloadTimer) clearTimeout(reloadTimer);
 					reloadTimer = setTimeout(() => {
 						reloadTimer = null;
@@ -217,19 +226,29 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 					}, 200);
 				},
 			);
-		} catch {
+			log.info("config watcher started", { path: configPath });
+		} catch (e) {
+			log.warn("config watcher failed", { error: e instanceof Error ? e.message : String(e) });
 			// fs.watch can fail in sandboxed envs. Hot-reload is a
 			// nicety; session_start still works.
 		}
 	};
 
 	pi.on("session_start", () => {
+		log.info("session_start");
 		registerSectionOnce();
 		reconfigureHandlers();
 		startConfigWatcher();
+		log.info("session_start done", {
+			echoEnabled: loadEchoConfig().echoEnabled,
+			sttProvider: loadEchoConfig().stt_provider,
+			sectionRegistered: !!sectionDisposer,
+			watcherStarted: !!configWatcher,
+		});
 	});
 
 	pi.on("session_shutdown", () => {
+		log.info("session_shutdown");
 		if (reloadTimer) {
 			clearTimeout(reloadTimer);
 			reloadTimer = null;
