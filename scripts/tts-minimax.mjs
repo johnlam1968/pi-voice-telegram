@@ -6,69 +6,383 @@
 //   - the bridge-substituted {mp3} path as `--out <path>`
 //
 // Reference: https://platform.minimaxi.com/docs/api-reference/speech-t2a-http
-// The modern endpoint `/v1/t2a_v2` (speech-2.x) returns JSON with
-// hex-encoded audio. cURL alone can fetch the response, but to get the
-// audio bytes we need JSON-parsing + hex-decoding — both done here in
-// Node.js. The next template step wraps the result in OGG/Opus for
-// Telegram's `sendVoice`.
+// The full request schema lives in docs/MINIMAX-T2A-OPENAPI.md (verbatim
+// copy of the page); this file's CLI/config mirrors the schema 1:1 so
+// every API knob is exposed.
 //
-// This replaces the v0.1.0 `pi-minimax-tts` extension (now retired — see
-// docs/TTS-VIA-OUTBOUND-HANDLERS.md). The API surface is identical to
-// what that extension exposed; just the integration point is now the
-// bridge's `outboundHandlers` command-template path.
+// ## 100% adjustability
 //
-// ## Auth resolution (priority order)
+// Every field in the OpenAPI `TextToAudioRequest` schema is reachable
+// through one of two channels:
+//   1. CLI flag (for scalars / enums; used directly or via the bridge
+//      template).
+//   2. `--config <json>` for the full request body — needed for the
+//      fields the CLI doesn't cover cleanly: `pronunciation_dict.tone`
+//      (array of strings), `timbre_weights` (array of objects), and
+//      any field added in a future API version.
+//
+// Precedence (later wins): built-in defaults → --config file → CLI flags.
+// The merge is a recursive deep merge, so the config file can override
+// just the keys it cares about.
+//
+// ## Auth resolution
 //
 //   1. $MINIMAX_API_KEY env var (operator-set)
 //   2. $MINIMAX_BASE_URL env var (overrides the region default)
-//   3. ~/.mmx/config.json → `api_key` + `region` (mmx-cli's canonical key store)
+//   3. $MINIMAX_REGION env var (overrides ~/.mmx/config.json)
+//   4. ~/.mmx/config.json → `api_key` + `region` (mmx-cli's canonical key store)
 //
 // ## Error model
 //
-//   - Any non-zero exit causes the bridge to record a runtime event
-//     via `recordTelegramRuntimeEvent` and fall through to the next
-//     handler (or fall back to text delivery if no provider succeeds).
-//   - Stderr messages are surfaced via `/telegram-status --debug`.
-//   - Exit codes:
-//     2 = missing API key (caller-side configuration error)
-//     3 = API/parse/response error (the actual synthesis request failed)
-//     4 = write to --out path failed
+//   - Exit 2: caller config error (missing --out, missing API key, invalid CLI value)
+//   - Exit 3: API/parse/response error (cURL, JSON, upstream base_resp != 0)
+//   - Exit 4: write to --out path failed
+//   - The bridge's `recordTelegramRuntimeEvent` picks up non-zero exits
+//     and falls back to text delivery if no handler succeeds.
 
 import { writeFileSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { request as httpsRequest } from "node:https";
 
-// --- CLI args ------------------------------------------------------------
+// ============================================================================
+// CLI parsing
+// ============================================================================
 
 const argv = process.argv.slice(2);
+
 function getArg(name) {
 	const eq = `--${name}=`;
-	const i = argv.findIndex((a) => a === `--${name}` || a.startsWith(eq));
-	if (i === -1) return undefined;
-	const a = argv[i];
-	return a.startsWith(eq) ? a.slice(eq.length) : argv[i + 1];
+	for (let i = 0; i < argv.length; i++) {
+		const a = argv[i];
+		if (a === `--${name}`) return argv[i + 1];
+		if (a.startsWith(eq)) return a.slice(eq.length);
+	}
+	return undefined;
 }
 
-const OUT = getArg("out");
-const TEXT = getArg("text");
-const MODEL = getArg("model") ?? "speech-2.8-hd";
-const VOICE = getArg("voice") ?? "Cantonese_CuteGirl";
-const LANG = getArg("lang") ?? "Chinese,Yue";
-const REGION = getArg("region") ?? "cn";
-const BITRATE = Number(getArg("bitrate") ?? "128000");
-const SAMPLE_RATE = Number(getArg("sample-rate") ?? "32000");
-const SPEED = Number(getArg("speed") ?? "1");
-const VOL = Number(getArg("vol") ?? "1");
-const PITCH = Number(getArg("pitch") ?? "0");
-const EMOTION = getArg("emotion") ?? "";
-const STREAM = getArg("stream") === "1" || getArg("stream") === "true";
+function hasFlag(name) {
+	return argv.includes(`--${name}`);
+}
 
-if (!OUT) {
-	process.stderr.write("tts-minimax.mjs: missing --out <path>\n");
+// Coerce a CLI string to the type the field expects. Numbers are parsed
+// when the string is purely numeric; "true"/"false" become booleans;
+// anything else passes through as a string. The CLI is intentionally
+// stringly-typed for ergonomics.
+function coerce(value) {
+	if (value === "true") return true;
+	if (value === "false") return false;
+	if (/^-?\d+$/.test(value)) return Number(value);
+	if (/^-?\d+\.\d+$/.test(value)) return Number(value);
+	return value;
+}
+
+function die(msg) {
+	process.stderr.write(`tts-minimax.mjs: ${msg}\n`);
 	process.exit(2);
 }
 
-// --- Auth + base URL ------------------------------------------------------
+// ============================================================================
+// Built-in defaults (Cantonese-leaning; override via --config or CLI)
+// ============================================================================
+
+const DEFAULTS = {
+	model: "speech-2.8-hd",
+	voice_setting: {
+		voice_id: "Cantonese_CuteGirl",
+		speed: 1,
+		vol: 1,
+		pitch: 0,
+	},
+	audio_setting: {
+		sample_rate: 32000,
+		bitrate: 128000,
+		format: "mp3",
+		channel: 1,
+	},
+	language_boost: "Chinese,Yue",
+};
+
+// ============================================================================
+// Field map: every API field, with CLI name, body path, type, and the
+// validator to apply. Boolean negations handled separately.
+// ============================================================================
+//
+// OpenAPI constraints (from docs/MINIMAX-T2A-OPENAPI.md, schema
+// `TextToAudioRequest` and nested types):
+//
+//   model:                 enum (modern + legacy)
+//   text:                  string (required)
+//   stream:                boolean
+//   voice_setting.voice_id: string
+//   voice_setting.speed:   number 0.5..2.0
+//   voice_setting.vol:     number 0.1..10.0
+//   voice_setting.pitch:   integer -12..12
+//   voice_setting.emotion: enum (modern models only)
+//   voice_setting.text_normalization: boolean
+//   voice_setting.latex_read:          boolean
+//   audio_setting.sample_rate:         integer enum
+//   audio_setting.bitrate:             integer enum
+//   audio_setting.format:              enum
+//   audio_setting.channel:             integer 1..2
+//   audio_setting.force_cbr:           boolean
+//   pronunciation_dict.tone:           array of strings  (config only)
+//   timbre_weights:                    array of objects  (config only)
+//   voice_modify.pitch:                integer -100..100
+//   voice_modify.intensity:             integer -100..100
+//   voice_modify.timbre:               integer -100..100
+//   voice_modify.sound_effects:         enum
+//   language_boost:                    string
+//   subtitle_enable:                   boolean
+//   subtitle_type:                     enum
+//   aigc_watermark:                    boolean
+//   output_format:                     enum
+//   emoji_event:                       boolean
+//   apply_text_filter:                 boolean
+
+const ENUMS = {
+	model: [
+		"speech-2.6-hd",
+		"speech-2.6-turbo",
+		"speech-2.8-hd",
+		"speech-2.8-turbo",
+		"speech-01-hd",
+		"speech-01-turbo",
+		"speech-2.5-hd-preview",
+		"speech-2.5-turbo-preview",
+		"speech-02",
+	],
+	emotion: ["neutral", "happy", "sad", "angry", "fearful", "disgusted", "surprised"],
+	format: ["mp3", "pcm", "flac", "wav", "pcmu_raw", "pcmu_wav", "opus"],
+	sample_rate: [8000, 16000, 22050, 24000, 32000, 44100],
+	bitrate: [32000, 64000, 128000, 256000],
+	subtitle_type: ["word", "sentence"],
+	output_format: ["hex", "url"],
+	sound_effects: ["spacious_echo", "auditorium_echo", "lofi_telephone", "robotic"],
+};
+
+const RANGES = {
+	"voice_setting.speed": { min: 0.5, max: 2.0 },
+	"voice_setting.vol": { min: 0.1, max: 10.0 },
+	"voice_setting.pitch": { min: -12, max: 12, integer: true },
+	"audio_setting.channel": { min: 1, max: 2, integer: true },
+	"voice_modify.pitch": { min: -100, max: 100, integer: true },
+	"voice_modify.intensity": { min: -100, max: 100, integer: true },
+	"voice_modify.timbre": { min: -100, max: 100, integer: true },
+};
+
+function validateField(path, value) {
+	if (value === undefined || value === null) return;
+	const enumValues = ENUMS[path] ?? ENUMS[path.split(".").pop()];
+	if (enumValues && !enumValues.includes(value)) {
+		die(`invalid value for ${path}: ${JSON.stringify(value)} (allowed: ${enumValues.join(", ")})`);
+	}
+	const range = RANGES[path];
+	if (range) {
+		if (typeof value !== "number" || Number.isNaN(value)) {
+			die(`invalid value for ${path}: ${JSON.stringify(value)} (expected number in ${range.min}..${range.max})`);
+		}
+		if (value < range.min || value > range.max) {
+			die(`out of range for ${path}: ${value} (allowed: ${range.min}..${range.max})`);
+		}
+	}
+}
+
+// `cli` → `bodyPath` mapping. Boolean toggles handled separately.
+// Keys are kebab-case CLI flag names (what the user actually types).
+const CLI_TO_PATH = {
+	// Top-level
+	model: "model",
+	lang: "language_boost",
+	"subtitle-type": "subtitle_type",
+	"output-format": "output_format",
+	// voice_setting
+	voice: "voice_setting.voice_id",
+	speed: "voice_setting.speed",
+	vol: "voice_setting.vol",
+	pitch: "voice_setting.pitch",
+	emotion: "voice_setting.emotion",
+	"text-normalization": "voice_setting.text_normalization",
+	"latex-read": "voice_setting.latex_read",
+	// audio_setting
+	"sample-rate": "audio_setting.sample_rate",
+	bitrate: "audio_setting.bitrate",
+	format: "audio_setting.format",
+	channel: "audio_setting.channel",
+	// voice_modify
+	"modify-pitch": "voice_modify.pitch",
+	"modify-intensity": "voice_modify.intensity",
+	"modify-timbre": "voice_modify.timbre",
+	"sound-effects": "voice_modify.sound_effects",
+};
+
+// Negative-flag table: `--no-X` sets the value to false. The default
+// for aigc_watermark and apply_text_filter is `true` (per the OpenAPI
+// spec), so the negative flag is the way to opt out.
+const NEGATIVE_FLAGS = {
+	"no-watermark": "aigc_watermark",
+	"no-text-filter": "apply_text_filter",
+	"no-text-normalization": "voice_setting.text_normalization",
+	"no-latex-read": "voice_setting.latex_read",
+};
+
+// Positive boolean flags: presence alone enables them.
+const POSITIVE_FLAGS = {
+	"force-cbr": "audio_setting.force_cbr",
+	"subtitle-enable": "subtitle_enable",
+	"emoji-event": "emoji_event",
+	"stream": "stream",
+};
+
+// ============================================================================
+// Build the request body: defaults ← --config ← CLI flags
+// ============================================================================
+
+function deepMerge(target, source) {
+	for (const [k, v] of Object.entries(source)) {
+		if (
+			v !== null &&
+			typeof v === "object" &&
+			!Array.isArray(v) &&
+			typeof target[k] === "object" &&
+			!Array.isArray(target[k])
+		) {
+			deepMerge(target[k], v);
+		} else {
+			target[k] = v;
+		}
+	}
+}
+
+const body = structuredClone(DEFAULTS);
+
+// --config <json>: deep merge into body
+const configPath = getArg("config");
+if (configPath !== undefined) {
+	let raw;
+	try {
+		raw = readFileSync(configPath, "utf8");
+	} catch (e) {
+		die(`--config ${configPath}: ${e.message}`);
+	}
+	let configObj;
+	try {
+		configObj = JSON.parse(raw);
+	} catch (e) {
+		die(`--config ${configPath}: invalid JSON: ${e.message}`);
+	}
+	if (configObj === null || typeof configObj !== "object" || Array.isArray(configObj)) {
+		die(`--config ${configPath}: expected a JSON object`);
+	}
+	deepMerge(body, configObj);
+}
+
+// CLI: positive boolean flags
+for (const [flag, path] of Object.entries(POSITIVE_FLAGS)) {
+	if (hasFlag(flag)) setNested(body, path, true);
+}
+
+// CLI: negative boolean flags
+for (const [flag, path] of Object.entries(NEGATIVE_FLAGS)) {
+	if (hasFlag(flag)) setNested(body, path, false);
+}
+
+// CLI: scalar flags (each takes a value; coerced to number/boolean/string).
+// Skip paths that are already covered by a boolean flag (above) so the
+// precedence is: positive/negative boolean flag wins, then scalar value.
+const SKIP_PATHS = new Set([
+	...Object.values(POSITIVE_FLAGS),
+	...Object.values(NEGATIVE_FLAGS),
+]);
+for (const [flag, path] of Object.entries(CLI_TO_PATH)) {
+	if (SKIP_PATHS.has(path)) continue;
+	const v = getArg(flag);
+	if (v === undefined) continue;
+	setNested(body, path, coerce(v));
+}
+
+function setNested(obj, path, value) {
+	const parts = path.split(".");
+	let cursor = obj;
+	for (let i = 0; i < parts.length - 1; i++) {
+		const k = parts[i];
+		if (cursor[k] === undefined || cursor[k] === null || typeof cursor[k] !== "object" || Array.isArray(cursor[k])) {
+			cursor[k] = {};
+		}
+		cursor = cursor[k];
+	}
+	cursor[parts[parts.length - 1]] = value;
+}
+
+// ============================================================================
+// Validate the assembled body
+// ============================================================================
+
+function validateBody(b) {
+	for (const path of Object.keys(ENUMS)) {
+		validateField(path, b[path]);
+	}
+	if (b.voice_setting) {
+		validateField("voice_setting.speed", b.voice_setting.speed);
+		validateField("voice_setting.vol", b.voice_setting.vol);
+		validateField("voice_setting.pitch", b.voice_setting.pitch);
+		validateField("voice_setting.emotion", b.voice_setting.emotion);
+	}
+	if (b.audio_setting) {
+		validateField("audio_setting.sample_rate", b.audio_setting.sample_rate);
+		validateField("audio_setting.bitrate", b.audio_setting.bitrate);
+		validateField("audio_setting.format", b.audio_setting.format);
+		validateField("audio_setting.channel", b.audio_setting.channel);
+	}
+	if (b.voice_modify) {
+		validateField("voice_modify.pitch", b.voice_modify.pitch);
+		validateField("voice_modify.intensity", b.voice_modify.intensity);
+		validateField("voice_modify.timbre", b.voice_modify.timbre);
+		validateField("voice_modify.sound_effects", b.voice_modify.sound_effects);
+	}
+	validateField("model", b.model);
+	validateField("subtitle_type", b.subtitle_type);
+	validateField("output_format", b.output_format);
+}
+
+validateBody(body);
+
+// ============================================================================
+// Streaming is not implemented in this script — it requires a different
+// response shape (text/event-stream with `data: {...}` SSE chunks and
+// multi-chunk hex concat). The non-streaming JSON path is what the
+// bridge's outboundHandlers flow expects anyway. Reject early with a
+// clear error rather than letting the user discover the SSE format at
+// the parse step.
+// ============================================================================
+
+if (body.stream === true) {
+	die(
+		"stream=true is not supported by this script — the non-streaming JSON response is the only path. " +
+			"Drop the --stream flag (or set stream: false in --config) to use the canonical pipeline.",
+	);
+}
+
+// ============================================================================
+// Required: --out, text
+// ============================================================================
+
+const OUT = getArg("out");
+if (!OUT) die("missing --out <path>");
+
+const TEXT = getArg("text");
+async function readStdin() {
+	const chunks = [];
+	for await (const c of process.stdin) chunks.push(c);
+	return Buffer.concat(chunks).toString("utf8");
+}
+const text = TEXT ?? (await readStdin());
+if (!text) die("empty text (no --text, no stdin)");
+
+body.text = text;
+
+// ============================================================================
+// Auth + base URL
+// ============================================================================
 
 function readMmxConfig() {
 	for (const p of [
@@ -80,7 +394,7 @@ function readMmxConfig() {
 			const obj = JSON.parse(readFileSync(p, "utf8"));
 			if (obj && typeof obj === "object") return obj;
 		} catch {
-			// ignore — try next path
+			// try next
 		}
 	}
 	return {};
@@ -89,70 +403,23 @@ function readMmxConfig() {
 const mmx = readMmxConfig();
 const API_KEY = process.env.MINIMAX_API_KEY ?? mmx.api_key;
 if (!API_KEY) {
-	process.stderr.write(
-		"tts-minimax.mjs: missing API key (set MINIMAX_API_KEY or write ~/.mmx/config.json with `api_key`)\n",
-	);
-	process.exit(2);
+	die("missing API key (set MINIMAX_API_KEY or write ~/.mmx/config.json with `api_key`)");
 }
 
-const REGION_DEFAULT = mmx.region === "global" ? "global" : "cn";
-const REGION_RESOLVED = process.env.MINIMAX_REGION ?? REGION ?? REGION_DEFAULT;
+const REGION = process.env.MINIMAX_REGION
+	? process.env.MINIMAX_REGION
+	: mmx.region === "global"
+		? "global"
+		: "cn";
 const HOST = process.env.MINIMAX_BASE_URL
 	? new URL(process.env.MINIMAX_BASE_URL).host
-	: REGION_RESOLVED === "global"
+	: REGION === "global"
 		? "api.minimax.io"
 		: "api.minimaxi.com";
 
-// --- Read text from stdin (or --text) ------------------------------------
-
-async function readStdin() {
-	const chunks = [];
-	for await (const c of process.stdin) chunks.push(c);
-	return Buffer.concat(chunks).toString("utf8");
-}
-
-const text = TEXT ?? (await readStdin());
-if (!text) {
-	process.stderr.write("tts-minimax.mjs: empty text (no --text, no stdin)\n");
-	process.exit(2);
-}
-
-// --- Build the modern /v1/t2a_v2 payload (speech-2.x) --------------------
-//
-// Reference: docs/MINIMAX-T2A-OPENAPI.md `TextToAudioRequest` schema.
-// Findings: docs/MINIMAX-T2A-FINDINGS.md §2 (each field's individual notes),
-// §2a/§2b/§2b-bis (voice id gotchas), §2d (legacy endpoint caveat).
-//
-// We use the modern endpoint because the legacy `/v1/text_to_speech`
-// (speech-01/02) silently returns Mandarin for Cantonese voice+boost
-// (see §2d). The modern endpoint accepts `language_boost: "Chinese,Yue"`
-// and produces the right language.
-
-const body = JSON.stringify({
-	model: MODEL,
-	text,
-	stream: STREAM,
-	voice_setting: {
-		voice_id: VOICE,
-		speed: SPEED,
-		vol: VOL,
-		pitch: PITCH,
-		...(EMOTION ? { emotion: EMOTION } : {}),
-	},
-	audio_setting: {
-		sample_rate: SAMPLE_RATE,
-		// bitrate is mp3-only per the spec — server ignores it for other
-		// formats. We only send it for the (default) mp3 path. The
-		// format is hardcoded to "mp3" because we want the bridge's
-		// ffmpeg step to produce a consistent OGG/Opus output.
-		bitrate: BITRATE,
-		format: "mp3",
-		channel: 1,
-	},
-	language_boost: LANG,
-});
-
-// --- POST to the modern endpoint -----------------------------------------
+// ============================================================================
+// POST
+// ============================================================================
 
 function postJson(host, urlPath, payload) {
 	return new Promise((resolve, reject) => {
@@ -188,7 +455,7 @@ function postJson(host, urlPath, payload) {
 
 let resp;
 try {
-	resp = await postJson(HOST, "/v1/t2a_v2", body);
+	resp = await postJson(HOST, "/v1/t2a_v2", JSON.stringify(body));
 } catch (e) {
 	process.stderr.write(`tts-minimax.mjs: network error: ${e.message}\n`);
 	process.exit(3);
@@ -201,10 +468,9 @@ if (resp.status < 200 || resp.status >= 300) {
 	process.exit(3);
 }
 
-// --- Parse the response. Three shapes (per findings §1, §3):
-//   1) JSON with `data.audio` hex (modern endpoint — our path)
-//   2) JSON with `audio` hex (alternative flat shape — legacy/variants)
-//   3) JSON error `{ base_resp: { status_code, status_msg } }` with non-zero code
+// ============================================================================
+// Parse the response (three shapes per the spec; see MINIMAX-T2A-FINDINGS.md §1)
+// ============================================================================
 
 let data;
 try {
@@ -231,7 +497,9 @@ if (!audioHex) {
 	process.exit(3);
 }
 
-// --- Write the decoded audio to --out -----------------------------------
+// ============================================================================
+// Write the decoded audio to --out
+// ============================================================================
 
 try {
 	writeFileSync(OUT, Buffer.from(audioHex, "hex"));

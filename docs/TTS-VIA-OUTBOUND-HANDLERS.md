@@ -93,7 +93,7 @@ writes to; the bridge reads the file from that path and calls Telegram's
 
 ## MiniMax: the script
 
-`scripts/tts-minimax.mjs` (~140 lines including comments). Pure Node.js
+`scripts/tts-minimax.mjs` (~410 lines including comments). Pure Node.js
 (uses `https.request` and `node:fs`; no external dependencies). A bash
 wrapper with `python3` was tried first and worked, but the heredoc-vs-stdin
 interaction (the python heredoc consumes stdin, so the agent text has to
@@ -110,12 +110,13 @@ The script:
   comes from `$MINIMAX_BASE_URL` env, else from `$MINIMAX_REGION` /
   `region` field, else the cn default
   (`https://api.minimaxi.com`).
-- POSTs to `/v1/t2a_v2` with the modern `speech-2.x` request body
-  (`voice_setting` / `audio_setting` nested, `channel` singular, hardcoded
-  `format: "mp3"`, `language_boost` from the `--lang` arg). See
-  `docs/MINIMAX-T2A-OPENAPI.md` for the full schema and
-  `docs/MINIMAX-T2A-FINDINGS.md` §2 for which fields matter and which to
-  ignore.
+- Builds the request body from built-in defaults, deep-merges a
+  `--config <json>` file if provided, then applies CLI flag overrides.
+  Every field in the OpenAPI `TextToAudioRequest` schema is reachable
+  (see "100% adjustability" below).
+- Validates every field against the OpenAPI constraints (enums, ranges)
+  before sending; rejects with a clear error on the first violation.
+- POSTs to `/v1/t2a_v2` with the modern `speech-2.x` request body.
 - Parses the JSON response, decodes the hex `data.audio` field, writes
   the bytes to `--out <path>` (the `{mp3}` placeholder).
 - Exits non-zero on cURL failure, JSON-parse failure, or upstream
@@ -123,45 +124,130 @@ The script:
   `recordTelegramRuntimeEvent` and falls through to the next handler (or
   falls back to text delivery if no provider succeeds).
 
-Tunable knobs are at the top of the script (CLI args: `--model`,
-`--voice`, `--lang`, `--region`, `--speed`, `--vol`, `--pitch`,
-`--emotion`, `--bitrate`, `--sample-rate`, `--stream`). To change the
-default voice, edit the script or pass `--voice <id>` via the template.
+### 100% adjustability
 
-### CLI quick reference
+Every field in `docs/MINIMAX-T2A-OPENAPI.md` `TextToAudioRequest` (and its
+nested `voice_setting`, `audio_setting`, `pronunciation_dict`, `timbre_weights`,
+`voice_modify`) is reachable through one of two channels:
+
+1. **CLI flag** for scalars and enums — direct invocation, or set in the
+   `telegram.json#outboundHandlers` template.
+2. **`--config <json>`** for arrays (`pronunciation_dict.tone`,
+   `timbre_weights`) and any future field the API adds before the CLI
+   is updated.
+
+Precedence: built-in defaults → `--config` file (deep merge) → CLI flags.
+
+### CLI reference (covers every OpenAPI field)
 
 ```text
 Usage: tts-minimax.mjs --out <path> [options]
 
 Required:
-  --out <path>            where to write the decoded audio (the {mp3} placeholder)
+  --out <path>                  path to write the decoded audio (the {mp3} placeholder)
 
 Source (one of):
-  --text "<string>"       the text to synthesize (test path)
-  (or read stdin)          the bridge's default — agent reply text
+  --text "<string>"             the text to synthesize (test path)
+  (or read stdin)                the bridge's default — agent reply text
 
-Tunable defaults (override via the script or extend the template):
-  --model <id>            default: speech-2.8-hd
-  --voice <id>            default: Cantonese_CuteGirl
-  --lang <id>             default: Chinese,Yue
-  --region <cn|global>    default: cn (api.minimaxi.com)
-  --speed <0.5..2.0>      default: 1
-  --vol <0.1..10.0>       default: 1
-  --pitch <-12..12>       default: 0
-  --emotion <id>          default: (empty) — neutral
-  --bitrate <bps>         default: 128000 (mp3 only)
-  --sample-rate <hz>      default: 32000
-  --stream                default: false (non-streaming JSON response)
+Top-level:
+  --model <id>                  default: speech-2.8-hd
+                                enum: speech-2.6-hd, speech-2.6-turbo, speech-2.8-hd,
+                                speech-2.8-turbo, speech-01-hd, speech-01-turbo,
+                                speech-2.5-hd-preview, speech-2.5-turbo-preview, speech-02
+  --lang <id>                   default: Chinese,Yue
+                                (MiniMax language_boost: auto | Chinese | Chinese,Yue |
+                                 English | Japanese | Korean | French | German | Spanish |
+                                 Portuguese | Italian | Arabic | Russian | <custom>)
+  --subtitle-type <id>          default: (unset) | enum: word, sentence
+  --output-format <id>          default: (unset) | enum: hex, url
+  --stream                      boolean flag (positive). Rejected — not implemented.
+  --subtitle-enable             boolean flag (positive)
+  --emoji-event                 boolean flag (positive)
+  --no-watermark                boolean flag (negative; default aigc_watermark=true)
+  --no-text-filter              boolean flag (negative; default apply_text_filter=true)
+  --no-text-normalization       boolean flag (negative; default text_normalization=false)
+  --no-latex-read               boolean flag (negative; default latex_read=false)
+
+voice_setting:
+  --voice <id>                  default: Cantonese_CuteGirl
+  --speed <0.5..2.0>            default: 1
+  --vol <0.1..10.0>             default: 1
+  --pitch <-12..12>             default: 0
+  --emotion <id>                default: (unset) | enum: neutral, happy, sad, angry,
+                                fearful, disgusted, surprised (modern models only)
+  --text-normalization          boolean flag (positive)
+  --latex-read                  boolean flag (positive)
+
+audio_setting:
+  --sample-rate <hz>            default: 32000 | enum: 8000, 16000, 22050, 24000, 32000, 44100
+  --bitrate <bps>               default: 128000 | enum: 32000, 64000, 128000, 256000 (mp3 only)
+  --format <id>                 default: mp3 | enum: mp3, pcm, flac, wav, pcmu_raw, pcmu_wav, opus
+  --channel <1-2>               default: 1
+  --force-cbr                   boolean flag (positive; only for streaming mp3)
+
+voice_modify (post-processing effects — built only if any of these is set):
+  --modify-pitch <-100..100>    default: (unset) | range: -100..100
+  --modify-intensity <-100..100> default: (unset) | range: -100..100
+  --modify-timbre <-100..100>   default: (unset) | range: -100..100
+  --sound-effects <id>          default: (unset) | enum: spacious_echo, auditorium_echo,
+                                lofi_telephone, robotic
+
+pronunciation_dict.tone + timbre_weights: --config file only
+  These are arrays (strings; objects with voice_id+weight). The CLI is the
+  wrong shape for them. Set them via a JSON config file:
+
+  {
+    "pronunciation_dict": { "tone": ["处理/(chu3)(li3)", "危险/dangerous"] },
+    "timbre_weights": [
+      { "voice_id": "female-shaonv", "weight": 70 },
+      { "voice_id": "male-qn-qingse", "weight": 30 }
+    ]
+  }
+
+  ...then pass --config /path/to/file.json on the CLI.
 
 Auth (priority order):
-  $MINIMAX_API_KEY        env var (operator-set)
-  $MINIMAX_BASE_URL       env var (overrides region)
-  $MINIMAX_REGION         env var (overrides ~/.mmx/config.json)
-  ~/.mmx/config.json      mmx-cli's canonical key store → `api_key` + `region`
+  $MINIMAX_API_KEY              env var (operator-set)
+  $MINIMAX_BASE_URL             env var (overrides region)
+  $MINIMAX_REGION               env var (overrides ~/.mmx/config.json)
+  ~/.mmx/config.json            mmx-cli's canonical key store → `api_key` + `region`
 ```
 
-Exit codes: `2` = caller-side config error (missing key, missing `--out`,
-empty text). `3` = API/parse/response error. `4` = write to `--out` failed.
+### Exit codes
+
+- `2` — caller config error (missing `--out`, missing API key, empty
+  text, invalid enum, out-of-range numeric, malformed `--config` JSON,
+  `--stream` not implemented)
+- `3` — API / parse / response error (cURL, JSON, `base_resp.status_code !== 0`)
+- `4` — write to `--out` failed (permissions, disk full, etc.)
+
+The bridge's `recordTelegramRuntimeEvent` picks up non-zero exits and
+falls back to text delivery if no handler succeeds.
+
+### Worked examples
+
+```bash
+# Defaults (Cantonese_CuteGirl, speech-2.8-hd, mp3, 32kHz mono)
+echo "今日天氣好好" | tts-minimax.mjs --out /tmp/x.mp3
+
+# Custom voice + emotion + sound effect
+echo "今日天氣好好" | tts-minimax.mjs --out /tmp/x.mp3 \
+  --voice male-qn-jingying --emotion happy --sound-effects auditorium_echo
+
+# Pronunciation dict + timbre weights via config
+cat > /tmp/cfg.json <<EOF
+{ "pronunciation_dict": { "tone": ["处理/(chu3)(li3)"] } }
+EOF
+echo "處理" | tts-minimax.mjs --out /tmp/x.mp3 --config /tmp/cfg.json
+
+# Stereo WAV at 24 kHz
+echo "test" | tts-minimax.mjs --out /tmp/x.wav --format wav --channel 2 --sample-rate 24000
+
+# CLI override beats --config
+echo "x" | tts-minimax.mjs --out /tmp/x.mp3 \
+  --config /tmp/cfg.json --voice Cantonese_CuteGirl
+```
 
 ## OpenAI-compatible: inline cURL
 
