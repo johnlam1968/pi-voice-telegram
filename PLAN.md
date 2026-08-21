@@ -1,10 +1,26 @@
 # Plan: `pi-voice-telegram`
 
-**Status:** v0.16.2 shipped (monolithic). The 3-extension split (v0.3.0 → v0.5.0) shipped on the `extensions/` track. **v0.5.0 (extensions track) retired `pi-whisper-stt`** — the default `stt_provider` flipped to `"pi-openai-stt"`, the `pi-whisper-stt` peer-dep was dropped from `pi-telegram-echo/package.json`, and `extensions/pi-whisper-stt/` was deleted from the repo. `pi-openai-stt` covers every backend `pi-whisper-stt` ever talked to (local CUDA whisper-server via the `fw-openai-sts` shim, OpenAI's actual API, faster-whisper-server, etc.) via a single `base_url` config (string or string[] for a fallback chain). **v0.4.4 + v0.4.5** added the `telegram.json` config source and the fallback-chain semantics. Punctuation in the returned transcript is a free "which path fired" indicator — the local shim forwards to whisper.cpp which produces space-separated transcripts; OpenAI's `whisper-1` produces comma-separated transcripts. **v0.7.0+ TTS standardization** remains the next planned track (mirrors the STT side, deferred until the STT side is battle-tested).
+**Status:** v0.16.2 shipped (monolithic, on `master` and in the cluster). The 3-extension STT split (v0.3.0 → v0.5.0) shipped on the `extensions/` track — `pi-telegram-echo` (orchestrator) + `pi-openai-stt` (provider) cover every STT backend via a single `base_url` config. **v0.5.0 retired `pi-whisper-stt`**; `pi-openai-stt` is the only STT provider. **The v0.1.0 TTS track (orchestrator + 2 providers) was retired 2026-08-21** in favor of the bridge's `outboundHandlers` command-template path — see `docs/TTS-VIA-OUTBOUND-HANDLERS.md` and the new TTS decision below.
+
+## TTS decision (2026-08-21) — no extension, use `outboundHandlers`
+
+**TL;DR:** the bridge's `telegram.json#outboundHandlers` is the canonical integration point for TTS. No Pi extension, no orchestrator, no `registerTelegramVoiceSynthesisProvider` call. The bridge runs each template step as a shell command, threads results through `{text}` / `{mp3}` / `{ogg}` placeholders, and reads the final `.ogg`/`.opus` file for `sendVoice`.
+
+**What was tried and why each approach stopped:**
+
+| Approach | Form | Why it stopped |
+|---|---|---|
+| `pi-voice-telegram` monolithic (v0.1.0–v0.16.x) | One Pi extension that owned TTS + STT + tools | Split into atomic packages (v0.3.0+) for the STT side; the monolithic still exists in the repo as a working v0.16.2 reference but is no longer the active code path |
+| `pi-telegram-tts-minimax` + `pi-minimax-tts` + `pi-openai-tts` (v0.1.0 TTS track) | Three packages: orchestrator wrapping `registerTelegramVoiceSynthesisProvider`, two providers implementing a `TtsProvider` contract | Once the section UI was stripped, the orchestrator was a 50-line shim. cURL alone — with python3 for the JSON/hex dance — does everything both provider packages did, with no Node.js, no jiti cache, no extension lifecycle |
+| **`scripts/tts-minimax.sh` + `telegram.json#outboundHandlers` (current)** | One ~80-line shell script that calls the MiniMax T2A API and writes the audio; `telegram.json` references the script + an ffmpeg wrap line | **Current.** The provider decision is made at edit time, not at agent run time. To switch from MiniMax to OpenAI-compatible TTS, edit `telegram.json`; no `pi install`, no version pin |
+
+**STT is unchanged.** `pi-telegram-echo` (orchestrator) + `pi-openai-stt` (provider) still use the bridge's `registerTelegramVoiceTranscriptionProvider` seam, because STT needs to feed the transcript into the agent's prompt — cURL for STT would mean the agent never sees the text.
+
+See `docs/TTS-VIA-OUTBOUND-HANDLERS.md` for the full architecture, the script, the cURL templates for both MiniMax and OpenAI, and what was removed.
 
 ## What this is
 
-A Telegram voice/text companion extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono) and the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge. Sits in the agent's npm tree next to the bridge, registers a TTS synthesis provider (mm-tts-backed), and an inbound voice echo pipeline (whisper-server-backed). In v0.6.0, optionally exposes `synthesize_voice` and `transcribe_audio` as agent-callable tools.
+A Telegram voice/text companion extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono) and the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge. **STT**: `pi-telegram-echo` (orchestrator) + `pi-openai-stt` (provider) register a transcription provider on the bridge. **TTS**: `telegram.json#outboundHandlers` declares a command-template pipeline that calls the MiniMax T2A API (or any OpenAI-compatible TTS) and wraps the result in OGG/Opus for `sendVoice`. **LLM tools (opt-in)**: `pi-telegram-settings` exposes schema-validated `config_read` / `config_write` / `config_reset` for editing any `telegram.json` key.
 
 ## Current state (v0.6.0)
 

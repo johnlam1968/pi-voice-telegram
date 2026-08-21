@@ -391,12 +391,14 @@ designed for English.
 
 ## 12. Code map
 
-| Artifact | Role | Notes |
+> **As of 2026-08-21 the `pi-openai-tts` and `pi-telegram-tts-minimax` extension packages were retired.** The cURL template in `telegram.json#outboundHandlers` is the canonical integration. See `docs/TTS-VIA-OUTBOUND-HANDLERS.md` for the current architecture. The findings in this doc still apply — the cURL template uses the same parameters (model, voice, `instructions`, `response_format`) that the v0.1.0 package used.
+
+| Artifact (retired) | Role | Notes |
 |---|---|---|
-| `extensions/pi-openai-tts/openai-tts.ts` | The HTTP client (`synthesize()`). Reads `telegram.json` → env → auth.json → smart default. Validates model / voice / format / speed / bitrate / sampleRate. Throws `OpenAiTtsError(code: 1|2|3|4)`. | The `instructions` field is **not yet wired through** — the TtsRequest contract has `extras: Record<string, unknown>`, so we could read `extras.instructions` and pass it to the body, but the v0.1.0 doesn't. (See §13.) |
-| `extensions/pi-openai-tts/index.ts` | The provider. Wraps `transcribe()` with a `TtsProvider` interface. Re-wraps `OpenAiTtsError` as `TtsProviderError`. Registers at module load. | |
-| `extensions/pi-telegram-tts-minimax/tts-provider.ts` | The `TtsProvider` contract + globalThis registry. | `TtsRequest` has an `extras` field for provider-specific knobs. |
-| `extensions/pi-telegram-tts-minimax/index.ts` | The orchestrator. Looks up the configured `tts_provider` and delegates. | Reads `lang` from the bridge's `options?.lang` and passes it as `TtsRequest.lang`. (OpenAI doesn't use `lang` in the body, so this is informational only.) |
+| `extensions/pi-openai-tts/openai-tts.ts` | The HTTP client (`synthesize()`). Reads `telegram.json` → env → auth.json → smart default. Validates model / voice / format / speed / bitrate / sampleRate. Throws `OpenAiTtsError(code: 1|2|3|4)`. | The `instructions` field was **not yet wired through** — the TtsRequest contract had `extras: Record<string, unknown>`. The cURL template passes `instructions` directly. |
+| `extensions/pi-openai-tts/index.ts` | The provider. Wrapped `synthesize()` with a `TtsProvider` interface. Re-wrapped `OpenAiTtsError` as `TtsProviderError`. Registered at module load. | |
+| `extensions/pi-telegram-tts-minimax/tts-provider.ts` | The `TtsProvider` contract + globalThis registry. | `TtsRequest` had an `extras` field for provider-specific knobs. |
+| `extensions/pi-telegram-tts-minimax/index.ts` | The orchestrator. Looked up the configured `tts_provider` and delegated. | Read `lang` from the bridge's `options?.lang` and passed it as `TtsRequest.lang`. (OpenAI doesn't use `lang` in the body, so this was informational only.) |
 
 ---
 
