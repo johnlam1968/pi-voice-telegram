@@ -53,8 +53,7 @@
  *     `TelegramVoiceSynthesisProvider` interface).
  */
 
-import { existsSync, readFileSync, watch, type FSWatcher } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -71,49 +70,12 @@ import {
 	getTtsProvider,
 	listTtsProviders,
 	TtsProviderError,
-} from "./tts-provider.js";
+	type TtsOrchestratorConfig,
+} from "./tts-config.js";
 
-/** Settings persisted in `telegram.json` under
- *  `extensions["pi-telegram-tts-minimax"]`. */
-export interface TtsOrchestratorConfig {
-	/** Id of the TtsProvider to use. Must match a registered
-	 *  TtsProvider (e.g., "pi-minimax-tts", "pi-openai-tts").
-	 *  Default: "pi-minimax-tts". */
-	tts_provider: string;
-}
-
-const DEFAULTS: TtsOrchestratorConfig = {
-	tts_provider: "pi-minimax-tts",
-};
+import { registerTtsSection } from "./tts-section.js";
 
 const PROVIDER_ID = "pi-telegram-tts-minimax/tts";
-
-/** Read the `extensions["pi-telegram-tts-minimax"]` block from
- *  `telegram.json`. Returns the defaults if the file is missing,
- *  unreadable, malformed, or doesn't have the block. */
-function loadTtsConfig(): TtsOrchestratorConfig {
-	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-	const configPath = join(dir, "telegram.json");
-	if (!existsSync(configPath)) return structuredClone(DEFAULTS);
-	try {
-		const raw = readFileSync(configPath, "utf8");
-		const parsed = JSON.parse(raw) as {
-			extensions?: Record<string, { tts_provider?: unknown } | undefined>;
-		};
-		const block = (parsed.extensions ?? {})["pi-telegram-tts-minimax"] as
-			| Partial<TtsOrchestratorConfig>
-			| undefined;
-		if (!block) return structuredClone(DEFAULTS);
-		return {
-			tts_provider:
-				typeof block.tts_provider === "string" && block.tts_provider
-					? block.tts_provider
-					: DEFAULTS.tts_provider,
-		};
-	} catch {
-		return structuredClone(DEFAULTS);
-	}
-}
 
 /** Build the synthesis provider closure. Captures `cfg` so
  *  `telegram.json` writes take effect on the next inbound message
@@ -215,6 +177,13 @@ function listInstalledTtsProviders(): string {
 
 export default function piTelegramTtsMinimax(pi: ExtensionAPI): void {
 	let disposer: (() => void) | null = null;
+	// The section UI must be registered once per session; the
+	// bridge mints a fresh token on each registerTelegramSection
+	// call, so re-registering would stale the in-Telegram menu
+	// buttons. The disposer is held across hot-reloads so the
+	// next `reconfigure()` (which only re-registers the bridge
+	// TTS provider) doesn't re-register the section.
+	let sectionDisposer: (() => void) | null = null;
 
 	let configWatcher: FSWatcher | null = null;
 	let reloadTimer: NodeJS.Timeout | null = null;
@@ -229,7 +198,7 @@ export default function piTelegramTtsMinimax(pi: ExtensionAPI): void {
 			disposer();
 			disposer = null;
 		}
-		const cfg = loadTtsConfig();
+		const cfg = loadTtsOrchestratorConfig();
 		try {
 			disposer = registerTelegramVoiceSynthesisProvider(
 				buildSynthesisProvider(cfg),
@@ -269,6 +238,11 @@ export default function piTelegramTtsMinimax(pi: ExtensionAPI): void {
 	};
 
 	pi.on("session_start", () => {
+		// The section must be registered BEFORE reconfigure() so
+		// the user can see the current TTS state in the main menu
+		// (and so the section can be picked up by a hot-reload
+		// before any voice message is processed).
+		if (!sectionDisposer) sectionDisposer = registerTtsSection();
 		reconfigure();
 		startConfigWatcher();
 	});
@@ -289,6 +263,10 @@ export default function piTelegramTtsMinimax(pi: ExtensionAPI): void {
 		if (disposer) {
 			disposer();
 			disposer = null;
+		}
+		if (sectionDisposer) {
+			sectionDisposer();
+			sectionDisposer = null;
 		}
 	});
 }
