@@ -333,16 +333,15 @@ async function handleSelectVoice(
 	// Persist. The provider reads its config on every call, so
 	// this takes effect on the next voice reply.
 	saveTtsProviderField(cfg.tts_provider, "voice", voiceId);
+	const newCfg = loadTtsOrchestratorConfig();
 	const newProv = loadTtsProviderConfig(cfg.tts_provider);
 	trace("select-voice", voiceId, {
-		tts_provider: cfg.tts_provider,
+		tts_provider: newCfg.tts_provider,
 		voice: newProv.voice,
 	});
 	await ctx.answerCallback(`Voice: ${voiceId}`);
 	// Re-render the settings menu (provider picker) with the
 	// new voice marked.
-	const newCfg = loadTtsOrchestratorConfig();
-	const newProv = loadTtsProviderConfig(cfg.tts_provider);
 	await ctx.edit({
 		text: renderSettingsText(newCfg, newProv),
 		parseMode: "html",
