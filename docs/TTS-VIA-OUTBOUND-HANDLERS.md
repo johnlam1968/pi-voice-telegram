@@ -19,7 +19,7 @@ For MiniMax:
   {
     "type": "voice",
     "template": [
-      "/home/john/CodingProjects/pi-voice-telegram/scripts/tts-minimax.sh {mp3}",
+      "/home/john/CodingProjects/pi-voice-telegram/scripts/tts-minimax.mjs --out {mp3}",
       "ffmpeg -y -i {mp3} -c:a libopus -b:a 32k -ar 48000 -ac 1 -application voip -vbr on -compression_level 10 -f ogg {ogg}"
     ],
     "output": "ogg"
@@ -93,25 +93,75 @@ writes to; the bridge reads the file from that path and calls Telegram's
 
 ## MiniMax: the script
 
-`scripts/tts-minimax.sh` (~80 lines including comments):
+`scripts/tts-minimax.mjs` (~140 lines including comments). Pure Node.js
+(uses `https.request` and `node:fs`; no external dependencies). A bash
+wrapper with `python3` was tried first and worked, but the heredoc-vs-stdin
+interaction (the python heredoc consumes stdin, so the agent text has to
+be saved to a temp file first) made it more code than the Node version
+and harder to maintain. Node was already on the host (the bridge itself
+runs on Node), so the dependency is zero-net.
 
-- Reads `{text}` from stdin (saved to a temp file because the inner
-  `python3` heredoc would otherwise consume stdin as script source).
+The script:
+
+- Reads the agent's reply text from stdin (or `--text <arg>` for testing).
+  The bridge sends the agent text on stdin to the first template step.
 - Resolves the API key from `$MINIMAX_API_KEY` env, then
-  `~/.mmx/config.json`.
-- POSTs to `https://api.minimaxi.com/v1/t2a_v2` with
-  `model: "speech-2.8-hd"`, `voice_id: "Cantonese_CuteGirl"`,
-  `voice_setting{ speed: 1, vol: 1, pitch: 0 }`,
-  `audio_setting{ sample_rate: 32000, bitrate: 128000, format: "mp3", channel: 1 }`.
-- Parses the JSON response, decodes the hex `data.audio` field, writes MP3
-  to `{mp3}`.
+  `~/.mmx/config.json` (mmx-cli's canonical key store). The base URL
+  comes from `$MINIMAX_BASE_URL` env, else from `$MINIMAX_REGION` /
+  `region` field, else the cn default
+  (`https://api.minimaxi.com`).
+- POSTs to `/v1/t2a_v2` with the modern `speech-2.x` request body
+  (`voice_setting` / `audio_setting` nested, `channel` singular, hardcoded
+  `format: "mp3"`, `language_boost` from the `--lang` arg). See
+  `docs/MINIMAX-T2A-OPENAPI.md` for the full schema and
+  `docs/MINIMAX-T2A-FINDINGS.md` §2 for which fields matter and which to
+  ignore.
+- Parses the JSON response, decodes the hex `data.audio` field, writes
+  the bytes to `--out <path>` (the `{mp3}` placeholder).
 - Exits non-zero on cURL failure, JSON-parse failure, or upstream
   `base_resp.status_code != 0`. The bridge records the exit code via
   `recordTelegramRuntimeEvent` and falls through to the next handler (or
   falls back to text delivery if no provider succeeds).
 
-Tunable knobs are at the top of the script — edit and reload. Or fork the
-script to keep multiple voice presets.
+Tunable knobs are at the top of the script (CLI args: `--model`,
+`--voice`, `--lang`, `--region`, `--speed`, `--vol`, `--pitch`,
+`--emotion`, `--bitrate`, `--sample-rate`, `--stream`). To change the
+default voice, edit the script or pass `--voice <id>` via the template.
+
+### CLI quick reference
+
+```text
+Usage: tts-minimax.mjs --out <path> [options]
+
+Required:
+  --out <path>            where to write the decoded audio (the {mp3} placeholder)
+
+Source (one of):
+  --text "<string>"       the text to synthesize (test path)
+  (or read stdin)          the bridge's default — agent reply text
+
+Tunable defaults (override via the script or extend the template):
+  --model <id>            default: speech-2.8-hd
+  --voice <id>            default: Cantonese_CuteGirl
+  --lang <id>             default: Chinese,Yue
+  --region <cn|global>    default: cn (api.minimaxi.com)
+  --speed <0.5..2.0>      default: 1
+  --vol <0.1..10.0>       default: 1
+  --pitch <-12..12>       default: 0
+  --emotion <id>          default: (empty) — neutral
+  --bitrate <bps>         default: 128000 (mp3 only)
+  --sample-rate <hz>      default: 32000
+  --stream                default: false (non-streaming JSON response)
+
+Auth (priority order):
+  $MINIMAX_API_KEY        env var (operator-set)
+  $MINIMAX_BASE_URL       env var (overrides region)
+  $MINIMAX_REGION         env var (overrides ~/.mmx/config.json)
+  ~/.mmx/config.json      mmx-cli's canonical key store → `api_key` + `region`
+```
+
+Exit codes: `2` = caller-side config error (missing key, missing `--out`,
+empty text). `3` = API/parse/response error. `4` = write to `--out` failed.
 
 ## OpenAI-compatible: inline cURL
 
