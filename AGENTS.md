@@ -52,17 +52,38 @@ When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegra
 
 ## Project layout
 
-- `extensions/pi-telegram-stt/` — sister extension: inbound STT + 🎙️ echo (renamed from `pi-telegram-echo` in v0.18.1). v0.6.0.
-- `extensions/pi-openai-stt/` — sister extension: STT provider that talks to any OpenAI-compatible API gateway. v0.2.0.
-- `extensions/_logger.ts` — shared stderr logger for both sister extensions.
-- `scripts/tts-minimax.mjs` — MiniMax T2A CLI (called by `telegram.json#outboundHandlers[0].template`).
-- `scripts/tts-openai.mjs` — OpenAI `/v1/audio/speech` CLI (called by the template).
-- `scripts/fw-openai-sts.ts` — host-side OpenAI-compatible shim for the local `whisper-server` (install to `~/.pi/agent/bin/fw-openai-sts`; `pi-openai-stt` talks to it via `base_url: http://127.0.0.1:8081/v1`).
+- `extensions/pi-telegram-stt/` — sister extension: inbound STT + 🎙️ echo (renamed from `pi-telegram-echo` in v0.18.1). v0.7.0. Self-contained (bundles its own `_logger.ts` since v0.7.0). Publishable as `pi-telegram-stt` to the npm registry.
+- `extensions/pi-openai-stt/` — sister extension: STT provider that talks to any OpenAI-compatible API gateway. v0.3.0. Self-contained (bundles its own `_logger.ts` since v0.3.0). Publishable as `pi-openai-stt` to the npm registry.
+- `extensions/pi-voice-telegram-scripts/` — runtime shell scripts (v0.1.0). Publishable as `pi-voice-telegram-scripts` to the npm registry; the `bin` field makes them available as `tts-minimax`, `tts-openai`, and `fw-openai-sts` after `npm install`:
+  - `tts-minimax.mjs` — MiniMax T2A CLI
+  - `tts-openai.mjs` — OpenAI `/v1/audio/speech` CLI
+  - `fw-openai-sts.ts` — host-side OpenAI-compatible shim for the local `whisper-server` (the `bin/fw-openai-sts` bash wrapper invokes `node --experimental-strip-types` on the .ts source)
+- `scripts/publish.sh` — publishes the 3 sister packages to the npm registry in dependency order; refuses to overwrite existing versions; auto-creates a git tag on success.
+- `scripts/mmx-tts-smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip).
 - `scripts/dev-status.sh`, `scripts/dev-watch.sh` — daily debug kit.
 - `docs/DEBUGGING.md` — log surface map + `dev-status.sh` / `dev-watch.sh` usage.
 - `docs/DESIGN-INTENT.md` — the "we said no to X because Y" record.
 - `docs/TTS-VIA-OUTBOUND-HANDLERS.md` — `telegram.json#outboundHandlers[0].template` integration (MiniMax + OpenAI examples).
 - `archive/` — investigation findings, superseded test scripts, design history, and bug filings. See `archive/README.md` for the full index.
+
+## Publishing the 3 sister packages to npm
+
+The cluster image (`pi-sandbox`) installs the 3 sister packages at `@latest` from the npm registry — every rebuild picks up the newest published version. The release flow is:
+
+```bash
+# 1. Bump versions in each package (manual or `npm version patch` in each)
+cd extensions/pi-voice-telegram-scripts && npm version patch && cd ../..
+cd extensions/pi-openai-stt && npm version patch && cd ../..
+cd extensions/pi-telegram-stt && npm version patch && cd ../..
+
+# 2. Publish (publish.sh handles the order, refuses to overwrite, tags)
+./scripts/publish.sh            # or with --dry-run first to verify
+
+# 3. Push the tag
+git push --follow-tags
+```
+
+After this, every `docker build` of `pi-sandbox` will pull the new versions.
 
 ## Code style
 
