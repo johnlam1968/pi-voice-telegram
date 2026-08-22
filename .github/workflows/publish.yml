@@ -1,0 +1,158 @@
+# publish.yml — publish the 3 sister packages to the npm registry.
+#
+# Why this exists: as of npm v12, GATs (granular access tokens) with
+# the "bypass 2FA" permission can no longer publish directly. They
+# can only stage a publish (which a maintainer then approves with
+# 2FA interactively) or read private packages. This workflow uses
+# OIDC Trusted Publishing: GitHub Actions issues a short-lived
+# token to npm on each run, no stored secret, no 2FA prompt
+# needed. The OIDC handshake is itself the second factor.
+#
+# Trigger:
+#   - Push of a tag matching v* (the normal flow):
+#       git tag v0.7.0
+#       git push --follow-tags
+#     The tag's version is verified against each package's
+#     package.json before publish.
+#   - workflow_dispatch (manual run):
+#       Use this for the FIRST publish (when the package doesn't
+#       exist on npm yet — you must first create the package via
+#       `npm publish` locally, OR via the npm web UI, OR via
+#       `npm publish --otp <code>` if you have a TOTP generator).
+#       After the first publish, configure Trusted Publishing
+#       on npmjs.com (Package → Settings → Trusted Publishers)
+#       and every subsequent publish is via tag push.
+#
+# Setup (one-time, per package on npmjs.com):
+#   1. Go to https://www.npmjs.com/package/<name>/access
+#   2. "Publishing access" → "Add a trusted publisher"
+#   3. Repository: johnlam1968/pi-voice-telegram
+#      Workflow file: .github/workflows/publish.yml
+#      Environment: (leave blank for now — or set up a
+#                   "production" environment with required
+#                   reviewers for the manual-trigger fallback)
+#   4. Save.
+# Repeat for all 3 packages (pi-voice-telegram-scripts,
+# pi-openai-stt, pi-telegram-stt).
+#
+# Setup (one-time, in this repo's GitHub settings):
+#   None required. The workflow uses OIDC; no secrets to add.
+#   (If you ever fall back to NPM_TOKEN for some reason, add it
+#   as a repository secret under Settings → Secrets.)
+#
+# Setup (one-time, locally):
+#   The very first publish of each package can't use OIDC
+#   trusted publishing — the package has to exist on npm first.
+#   Use one of these bootstrap paths:
+#     a) The npm web UI's "publish" form (drag-and-drop a tarball
+#        built via `npm pack` from each package's directory).
+#     b) `npm publish --otp <6-digit-code>` from any host where
+#        you can read the TOTP code (the publish.sh in this repo
+#        supports this with `--otp` or `NPM_CONFIG_OTP`).
+#   After the first publish, configure trusted publishing on
+#   npm and every subsequent release is a tag push.
+
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish (e.g., 0.7.0). Leave blank to use the tag version (tag push only).'
+        required: false
+        type: string
+
+permissions:
+  contents: write   # for the GitHub Release
+  id-token: write   # for npm OIDC provenance
+
+jobs:
+  publish:
+    name: Publish 3 sister packages
+    runs-on: ubuntu-latest
+    # No `environment:` block by default — tag pushes publish
+    # immediately. For an extra gate, set up a GitHub Environment
+    # (Settings → Environments → "production") with required
+    # reviewers and add `environment: production` here.
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          # Fetch full history so the tag's commit SHA is resolvable.
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine version to publish
+        id: version
+        run: |
+          # Three sources of truth, in priority order:
+          # 1. workflow_dispatch input (manual run)
+          # 2. The tag name (push of v*)
+          # 3. Each package's package.json (fallback)
+          if [[ -n "${{ inputs.version }}" ]]; then
+            VERSION="${{ inputs.version }}"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            # github.ref_name is like "v0.7.0"; strip the v
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            # Fall back to the source-of-truth: the anchor
+            # package's version. We use pi-telegram-stt as the
+            # anchor because it's the last-published in dependency
+            # order.
+            VERSION=$(node -p "require('./extensions/pi-telegram-stt/package.json').version")
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Verify all 3 packages are at the target version
+        run: |
+          target="${{ steps.version.outputs.version }}"
+          failed=0
+          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt; do
+            actual=$(node -p "require('./extensions/${pkg}/package.json').version")
+            if [[ "$actual" != "$target" ]]; then
+              echo "::error::${pkg} is at ${actual}, expected ${target}"
+              failed=1
+            else
+              echo "ok: ${pkg}@${actual}"
+            fi
+          done
+          if [[ $failed -ne 0 ]]; then
+            echo "::error::One or more packages are at the wrong version."
+            echo "::error::Run \`cd extensions/<pkg> && npm version <target>\` for each, then commit."
+            exit 1
+          fi
+
+      - name: Publish pi-voice-telegram-scripts (leaves first, no peer deps)
+        run: |
+          cd extensions/pi-voice-telegram-scripts
+          npm publish --provenance --access public
+
+      - name: Publish pi-openai-stt
+        run: |
+          cd extensions/pi-openai-stt
+          npm publish --provenance --access public
+
+      - name: Publish pi-telegram-stt (anchor)
+        run: |
+          cd extensions/pi-telegram-stt
+          npm publish --provenance --access public
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          # No body — let the auto-generated release notes do the talking.
+          # Future enhancement: include a list of the 3 published packages
+          # with their install commands for end users.

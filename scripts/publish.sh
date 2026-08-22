@@ -2,6 +2,16 @@
 #
 # publish.sh — publish the three source packages to the npm registry.
 #
+# PREFERRED PATH: GitHub Actions (see .github/workflows/publish.yml).
+#   tag-based publish, OIDC trusted publishing, no 2FA prompt, no
+#   stored secret. The typical operator flow is:
+#       cd extensions/<pkg> && npm version <new>
+#       git commit -am "chore(release): v<X.Y.Z>"
+#       git tag v<X.Y.Z> && git push --follow-tags
+#   and the workflow handles the rest. This script is for the
+#   rare local-publish case (e.g. the first publish to bootstrap
+#   the package on npm, when you can provide a TOTP code).
+#
 # Packages published (in dependency order, leaves first):
 #   1. pi-voice-telegram-scripts   (no peer deps; the runtime CLIs)
 #   2. pi-openai-stt               (STT provider; no peer on pi-telegram-stt at runtime)

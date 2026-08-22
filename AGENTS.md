@@ -58,7 +58,9 @@ When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegra
   - `tts-minimax.mjs` — MiniMax T2A CLI
   - `tts-openai.mjs` — OpenAI `/v1/audio/speech` CLI
   - `fw-openai-sts.ts` — host-side OpenAI-compatible shim for the local `whisper-server` (the `bin/fw-openai-sts` bash wrapper invokes `node --experimental-strip-types` on the .ts source)
-- `scripts/publish.sh` — publishes the 3 sister packages to the npm registry in dependency order; refuses to overwrite existing versions; auto-creates a git tag on success.
+- `scripts/publish.sh` — local CLI publish for the 3 sister packages. The **preferred path is GitHub Actions** (`.github/workflows/publish.yml`, triggered by a `v*` tag push, using OIDC Trusted Publishing — no 2FA prompt, no stored secret). `publish.sh` is kept for `--dry-run` verification and emergency local publishes. See `docs/PUBLISHING.md` for the full setup walkthrough.
+- `.github/workflows/publish.yml` — the canonical release path. Tag-based trigger, OIDC provenance, dependency-ordered publish, GitHub Release creation.
+- `docs/PUBLISHING.md` — full setup walkthrough: OIDC trusted-publisher configuration, first-publish bootstrap (chicken-and-egg), 2FA OTP fallback, references to npm's deprecation timeline.
 - `scripts/mmx-tts-smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip).
 - `scripts/dev-status.sh`, `scripts/dev-watch.sh` — daily debug kit.
 - `docs/DEBUGGING.md` — log surface map + `dev-status.sh` / `dev-watch.sh` usage.
@@ -68,22 +70,33 @@ When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegra
 
 ## Publishing the 3 sister packages to npm
 
-The cluster image (`pi-sandbox`) installs the 3 sister packages at `@latest` from the npm registry — every rebuild picks up the newest published version. The release flow is:
+The cluster image (`pi-sandbox`) installs the 3 sister packages at `@latest` from the npm registry — every rebuild picks up the newest published version.
+
+**Preferred path: GitHub Actions with OIDC Trusted Publishing** (no 2FA prompt, no stored secret):
 
 ```bash
-# 1. Bump versions in each package (manual or `npm version patch` in each)
-cd extensions/pi-voice-telegram-scripts && npm version patch && cd ../..
-cd extensions/pi-openai-stt && npm version patch && cd ../..
-cd extensions/pi-telegram-stt && npm version patch && cd ../..
+# 1. Bump the version in each package
+cd extensions/pi-voice-telegram-scripts && npm version patch
+cd ../pi-openai-stt && npm version patch
+cd ../pi-telegram-stt && npm version patch
+cd ../..
 
-# 2. Publish (publish.sh handles the order, refuses to overwrite, tags)
-./scripts/publish.sh            # or with --dry-run first to verify
-
-# 3. Push the tag
+# 2. Commit + tag + push (the tag triggers the workflow)
+git add -A
+git commit -m "chore(release): v0.7.1"
+git tag v0.7.1
 git push --follow-tags
+
+# 3. Watch the workflow run
+#    https://github.com/<owner>/<repo>/actions/workflows/publish.yml
+#    On success, all 3 packages are on npm and a GitHub Release is created.
 ```
 
-After this, every `docker build` of `pi-sandbox` will pull the new versions.
+The workflow (`.github/workflows/publish.yml`) verifies the version match across all 3 packages, publishes them in dependency order (leaves first), and creates a GitHub Release. OIDC provenance is enabled.
+
+**Fallback path: local CLI** (`scripts/publish.sh`) — for the very first publish (chicken-and-egg with trusted publishing) and for emergencies. Uses `--otp <code>` or `NPM_CONFIG_OTP=<code>` for 2FA.
+
+See `docs/PUBLISHING.md` for the full setup walkthrough, including the one-time npmjs.com trusted-publisher configuration and the first-publish bootstrap.
 
 ## Code style
 
