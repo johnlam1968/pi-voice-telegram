@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# smoke-test.sh — 5-second verification that the TTS + ffmpeg + STT
+# mmx-tts-smoke-test.sh — 5-second verification that the TTS + ffmpeg + STT
 # pipeline works end-to-end WITHOUT spinning up the agent or the
 # bridge. Designed for fast iteration: run this after any change
 # to scripts/tts-*.mjs, scripts/fw-openai-sts.ts, or the
@@ -16,9 +16,9 @@
 # designed to be CI-friendly (one line per stage + summary).
 #
 # Usage:
-#   bash scripts/smoke-test.sh
-#   bash scripts/smoke-test.sh --voice Cantonese_PlayfulMan
-#   bash scripts/smoke-test.sh --keep   # don't delete the temp dir
+#   bash scripts/mmx-tts-smoke-test.sh
+#   bash scripts/mmx-tts-smoke-test.sh --voice Cantonese_PlayfulMan
+#   bash scripts/mmx-tts-smoke-test.sh --keep   # don't delete the temp dir
 #
 # Required tools: node (>=14.13.1 for `node:` prefix modules),
 # ffmpeg, ffprobe, curl. The host's $PATH must include them.
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
     --keep-shim) KEEP_SHIM=1; shift ;;
     -h|--help)
       sed -n '2,28p' "$0"; exit 0 ;;
-    *) echo "smoke-test: unknown arg: $1" >&2; exit 2 ;;
+    *) echo "mmx-tts-smoke-test: unknown arg: $1" >&2; exit 2 ;;
   esac
 done
 
@@ -56,7 +56,7 @@ done
 # instead of a confusing stack trace 5 lines deep.
 NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo "0")
 if [[ "$NODE_MAJOR" -lt 14 ]]; then
-  echo "smoke-test: FAIL — node major version is $NODE_MAJOR, need >=14.13.1" >&2
+  echo "mmx-tts-smoke-test: FAIL — node major version is $NODE_MAJOR, need >=14.13.1" >&2
   echo "  current: $(node --version 2>&1)" >&2
   echo "  hint: \`nvm install 18\` or newer" >&2
   exit 3
@@ -65,7 +65,7 @@ fi
 # Tool checks
 for tool in node ffmpeg ffprobe curl; do
   if ! command -v "$tool" >/dev/null 2>&1; then
-    echo "smoke-test: FAIL — missing tool: $tool" >&2
+    echo "mmx-tts-smoke-test: FAIL — missing tool: $tool" >&2
     exit 4
   fi
 done
@@ -76,7 +76,7 @@ done
 if [[ -z "${MINIMAX_CN_API_KEY:-}${MINIMAX_API_KEY:-}" ]] \
     && ! [[ -f "$HOME/.mmx/config.json" ]] \
     && ! [[ -f "$HOME/.MiniMax/config.json" ]]; then
-  echo "smoke-test: FAIL — no MiniMax API key found" >&2
+  echo "mmx-tts-smoke-test: FAIL — no MiniMax API key found" >&2
   echo "  set MINIMAX_CN_API_KEY, or create ~/.mmx/config.json" >&2
   exit 4
 fi
@@ -92,7 +92,7 @@ fi
 # ---------------------------------------------------------------------------
 # If $STT_URL isn't responding, try to start fw-openai-sts. The shim
 # is normally run as a user-level daemon; auto-starting it here means
-# `bash scripts/smoke-test.sh` works even after a fresh reboot. We
+# `bash scripts/mmx-tts-smoke-test.sh` works even after a fresh reboot. We
 # only kill the shim at the end if we started it ourselves — never
 # killing a pre-existing instance the operator might be using for
 # the live agent.
@@ -135,7 +135,7 @@ TMP=$(mktemp -d)
 
 if ! shim_up; then
   if [[ $NO_SHIM -eq 1 ]]; then
-    echo "smoke-test: FAIL — $STT_URL not responding and --no-shim set" >&2
+    echo "mmx-tts-smoke-test: FAIL — $STT_URL not responding and --no-shim set" >&2
     exit 8
   fi
 
@@ -153,14 +153,14 @@ if ! shim_up; then
   done
 
   if [[ -z "$SHIM_BIN" ]]; then
-    echo "smoke-test: FAIL — cannot find fw-openai-sts shim" >&2
+    echo "mmx-tts-smoke-test: FAIL — cannot find fw-openai-sts shim" >&2
     echo "  searched: $HOME/.pi/agent/bin/fw-openai-sts" >&2
     echo "           $(dirname "$0")/fw-openai-sts.ts" >&2
     echo "  hint: install the shim or set --no-shim to skip stage 3" >&2
     exit 8
   fi
 
-  echo "smoke-test: starting fw-openai-sts shim (background): $SHIM_BIN"
+  echo "mmx-tts-smoke-test: starting fw-openai-sts shim (background): $SHIM_BIN"
   # The .ts path needs node's strip-types. The wrapper script is
   # already an executable shell script that handles this internally.
   if [[ "$SHIM_BIN" == *.ts ]]; then
@@ -180,7 +180,7 @@ if ! shim_up; then
     fi
   done
   if ! shim_up; then
-    echo "smoke-test: FAIL — shim started but $STT_URL not responding after 5s" >&2
+    echo "mmx-tts-smoke-test: FAIL — shim started but $STT_URL not responding after 5s" >&2
     echo "  shim log:" >&2
     tail -10 "$TMP/fw-shim.log" >&2
     exit 8
@@ -209,20 +209,20 @@ trap 'cleanup_shim; [[ $KEEP -eq 0 ]] && rm -rf "$TMP"' EXIT
 # (TMP was already created earlier for the shim log; no need to recreate)
 trap 'cleanup_shim; [[ $KEEP -eq 0 ]] && rm -rf "$TMP"' EXIT
 
-echo "smoke-test: stage 1/3 — TTS via tts-minimax.mjs (voice=$VOICE model=$MODEL)"
+echo "mmx-tts-smoke-test: stage 1/3 — TTS via tts-minimax.mjs (voice=$VOICE model=$MODEL)"
 if ! node "$(dirname "$0")/tts-minimax.mjs" \
     --out "$TMP/tts.mp3" \
     --text "Smoke test" \
     --voice "$VOICE" \
     --model "$MODEL" 2>"$TMP/tts.stderr"; then
-  echo "smoke-test: FAIL — tts-minimax.mjs exited non-zero" >&2
+  echo "mmx-tts-smoke-test: FAIL — tts-minimax.mjs exited non-zero" >&2
   echo "  stderr (last 10 lines):" >&2
   tail -10 "$TMP/tts.stderr" >&2
   exit 5
 fi
 
 if [[ ! -s "$TMP/tts.mp3" ]]; then
-  echo "smoke-test: FAIL — tts.mp3 is empty" >&2
+  echo "mmx-tts-smoke-test: FAIL — tts.mp3 is empty" >&2
   exit 5
 fi
 
@@ -233,18 +233,18 @@ echo "  ok: $TTS_BYTES bytes MP3"
 # 2. ffmpeg wrap → OGG/Opus (the format the bridge wants)
 # ---------------------------------------------------------------------------
 
-echo "smoke-test: stage 2/3 — ffmpeg MP3 → OGG/Opus"
+echo "mmx-tts-smoke-test: stage 2/3 — ffmpeg MP3 → OGG/Opus"
 if ! ffmpeg -y -i "$TMP/tts.mp3" \
     -c:a libopus -b:a 32k -ar 48000 -ac 1 \
     -application voip -vbr on -compression_level 10 \
     -f ogg "$TMP/tts.ogg" 2>"$TMP/ffmpeg.stderr"; then
-  echo "smoke-test: FAIL — ffmpeg exited non-zero" >&2
+  echo "mmx-tts-smoke-test: FAIL — ffmpeg exited non-zero" >&2
   tail -10 "$TMP/ffmpeg.stderr" >&2
   exit 6
 fi
 
 if [[ ! -s "$TMP/tts.ogg" ]]; then
-  echo "smoke-test: FAIL — tts.ogg is empty" >&2
+  echo "mmx-tts-smoke-test: FAIL — tts.ogg is empty" >&2
   exit 6
 fi
 
@@ -255,17 +255,17 @@ PROBE=$(ffprobe -v error -select_streams a:0 \
   -show_entries stream=codec_name,sample_rate,channels \
   -of default=nw=1 "$TMP/tts.ogg" 2>&1)
 if ! grep -q "codec_name=opus" <<<"$PROBE"; then
-  echo "smoke-test: FAIL — OGG codec is not opus" >&2
+  echo "mmx-tts-smoke-test: FAIL — OGG codec is not opus" >&2
   echo "  $PROBE" >&2
   exit 6
 fi
 if ! grep -q "sample_rate=48000" <<<"$PROBE"; then
-  echo "smoke-test: FAIL — OGG sample rate is not 48000 Hz" >&2
+  echo "mmx-tts-smoke-test: FAIL — OGG sample rate is not 48000 Hz" >&2
   echo "  $PROBE" >&2
   exit 6
 fi
 if ! grep -q "channels=1" <<<"$PROBE"; then
-  echo "smoke-test: FAIL — OGG is not mono" >&2
+  echo "mmx-tts-smoke-test: FAIL — OGG is not mono" >&2
   echo "  $PROBE" >&2
   exit 6
 fi
@@ -277,13 +277,13 @@ echo "  ok: $OGG_BYTES bytes OGG/Opus (48kHz mono)"
 # 3. STT round-trip via fw-openai-sts → 127.0.0.1:8081
 # ---------------------------------------------------------------------------
 
-echo "smoke-test: stage 3/3 — STT round-trip via $STT_URL"
+echo "mmx-tts-smoke-test: stage 3/3 — STT round-trip via $STT_URL"
 if ! curl -sf "$STT_URL" \
     -F "file=@$TMP/tts.ogg" \
     -F "model=whisper-1" \
     -F "language=en" \
     > "$TMP/stt.body" 2>"$TMP/curl.stderr"; then
-  echo "smoke-test: FAIL — curl to $STT_URL failed" >&2
+  echo "mmx-tts-smoke-test: FAIL — curl to $STT_URL failed" >&2
   echo "  is fw-openai-sts running? (the local shim listens on :8081)" >&2
   tail -5 "$TMP/curl.stderr" >&2
   exit 7
@@ -303,13 +303,13 @@ elif [[ -s "$TMP/stt.body" ]]; then
   # for some inputs).
   STT_TEXT=$(sed 's/^[[:space:]]*//' "$TMP/stt.body" | head -1)
 else
-  echo "smoke-test: FAIL — STT response is empty (no JSON, no text)" >&2
+  echo "mmx-tts-smoke-test: FAIL — STT response is empty (no JSON, no text)" >&2
   cat "$TMP/stt.body" >&2
   exit 7
 fi
 
 if [[ -z "$STT_TEXT" ]]; then
-  echo "smoke-test: FAIL — STT transcript is empty" >&2
+  echo "mmx-tts-smoke-test: FAIL — STT transcript is empty" >&2
   cat "$TMP/stt.body" >&2
   exit 7
 fi
@@ -321,7 +321,7 @@ echo "  ok: STT returned: \"$STT_TEXT\""
 # ---------------------------------------------------------------------------
 
 echo
-echo "smoke-test: ALL 3 STAGES PASSED"
+echo "mmx-tts-smoke-test: ALL 3 STAGES PASSED"
 echo "  TTS:  $TTS_BYTES bytes MP3 (MiniMax $VOICE / $MODEL)"
 echo "  Opus: $OGG_BYTES bytes OGG/Opus (48kHz mono)"
 echo "  STT:  \"$STT_TEXT\""

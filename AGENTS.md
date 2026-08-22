@@ -74,8 +74,8 @@ When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegra
 - There is no automated test runner. The dev tools are in `scripts/`:
   - `scripts/dev-status.sh` — one-shot status snapshot (process, lock state, polling, runtime events, stderr)
   - `scripts/dev-watch.sh` — refresh every 2s (or `tail` of bridge + session + stderr)
-  - `scripts/smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip via fw-openai-sts). Run this after any change to `scripts/tts-*.mjs`, `scripts/fw-openai-sts.ts`, or the underlying provider configs. Exits 0 on success, non-zero on any failure. CI-friendly.
-- When changing `scripts/tts-*.mjs`, also run `scripts/smoke-test.sh` before considering the change done.
+  - `scripts/mmx-tts-smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip via fw-openai-sts). Run this after any change to `scripts/tts-*.mjs`, `scripts/fw-openai-sts.ts`, or the underlying provider configs. Exits 0 on success, non-zero on any failure. CI-friendly.
+- When changing `scripts/tts-*.mjs`, also run `scripts/mmx-tts-smoke-test.sh` before considering the change done.
 - For historical tests (`live-test.sh`, `test-v0.16.7-provider.ts`, `build-voice-catalog.py`), see `archive/scripts/`.
 
 ## PR & commit conventions
