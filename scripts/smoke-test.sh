@@ -41,6 +41,8 @@ while [[ $# -gt 0 ]]; do
     --model) MODEL="$2"; shift 2 ;;
     --stt-url) STT_URL="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --no-shim) NO_SHIM=1; shift ;;
+    --keep-shim) KEEP_SHIM=1; shift ;;
     -h|--help)
       sed -n '2,28p' "$0"; exit 0 ;;
     *) echo "smoke-test: unknown arg: $1" >&2; exit 2 ;;
@@ -86,11 +88,126 @@ if [[ -z "${MINIMAX_CN_API_KEY:-}" && -f "$HOME/.mmx/config.json" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# 0.5 Ensure the STT shim is up
+# ---------------------------------------------------------------------------
+# If $STT_URL isn't responding, try to start fw-openai-sts. The shim
+# is normally run as a user-level daemon; auto-starting it here means
+# `bash scripts/smoke-test.sh` works even after a fresh reboot. We
+# only kill the shim at the end if we started it ourselves — never
+# killing a pre-existing instance the operator might be using for
+# the live agent.
+
+NO_SHIM="${NO_SHIM:-0}"
+KEEP_SHIM="${KEEP_SHIM:-0}"
+
+# Extract the base URL (we need it for the health check; STT_URL is
+# the full path /v1/audio/transcriptions).
+STT_BASE=$(echo "$STT_URL" | sed -E 's|/v1/.*$||')
+
+shim_up() {
+  # The shim doesn't expose a /health endpoint, but the
+  # /v1/audio/transcriptions endpoint will 4xx-fast for GET (no file)
+  # — that's still a sign the server is up. A simpler check: is the
+  # port listening at all? Use `ss` if available, fall back to `nc`,
+  # fall back to `curl` to a known endpoint.
+  if command -v ss >/dev/null 2>&1; then
+    ss -tln 2>/dev/null | awk '{print $4}' | grep -qE "127\.0\.0\.1:${STT_PORT}|0\.0\.0\.0:${STT_PORT}|:::${STT_PORT}"
+  elif command -v nc >/dev/null 2>&1; then
+    nc -z 127.0.0.1 "$STT_PORT" 2>/dev/null
+  else
+    # Last resort: send a malformed request and check the status code.
+    # Any HTTP response means the port is open.
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 "$STT_BASE/" 2>/dev/null || echo "000")
+    [[ "$code" != "000" ]]
+  fi
+}
+
+STT_PORT=$(echo "$STT_BASE" | sed -E 's|.*:||')
+SHIM_PID=""
+SHIM_STARTED=0
+
+# Set up the temp dir early — we need it for the shim's log too.
+TMP=$(mktemp -d)
+
+# Resolve STT_PORT if it's empty (URL with no port, e.g. http://host/path)
+[[ -z "$STT_PORT" ]] && STT_PORT=80
+
+if ! shim_up; then
+  if [[ $NO_SHIM -eq 1 ]]; then
+    echo "smoke-test: FAIL — $STT_URL not responding and --no-shim set" >&2
+    exit 8
+  fi
+
+  # Find the shim. Three locations to try, in order:
+  #   1. $HOME/.pi/agent/bin/fw-openai-sts  (operator install path)
+  #   2. <source>/scripts/fw-openai-sts.ts  (this repo's source, run via node)
+  SHIM_BIN=""
+  for cand in \
+      "$HOME/.pi/agent/bin/fw-openai-sts" \
+      "$(dirname "$0")/fw-openai-sts.ts"; do
+    if [[ -x "$cand" ]] || ([[ "$cand" == *.ts ]] && [[ -f "$cand" ]]); then
+      SHIM_BIN="$cand"
+      break
+    fi
+  done
+
+  if [[ -z "$SHIM_BIN" ]]; then
+    echo "smoke-test: FAIL — cannot find fw-openai-sts shim" >&2
+    echo "  searched: $HOME/.pi/agent/bin/fw-openai-sts" >&2
+    echo "           $(dirname "$0")/fw-openai-sts.ts" >&2
+    echo "  hint: install the shim or set --no-shim to skip stage 3" >&2
+    exit 8
+  fi
+
+  echo "smoke-test: starting fw-openai-sts shim (background): $SHIM_BIN"
+  # The .ts path needs node's strip-types. The wrapper script is
+  # already an executable shell script that handles this internally.
+  if [[ "$SHIM_BIN" == *.ts ]]; then
+    nohup node --experimental-strip-types "$SHIM_BIN" > "$TMP/fw-shim.log" 2>&1 &
+  else
+    nohup "$SHIM_BIN" > "$TMP/fw-shim.log" 2>&1 &
+  fi
+  SHIM_PID=$!
+  SHIM_STARTED=1
+
+  # Wait up to 5s for the shim to come up.
+  for _ in {1..50}; do
+    sleep 0.1
+    if shim_up; then
+      echo "  ok: shim up (pid=$SHIM_PID)"
+      break
+    fi
+  done
+  if ! shim_up; then
+    echo "smoke-test: FAIL — shim started but $STT_URL not responding after 5s" >&2
+    echo "  shim log:" >&2
+    tail -10 "$TMP/fw-shim.log" >&2
+    exit 8
+  fi
+fi
+
+# Cleanup: kill the shim if we started it (and the user didn't say
+# --keep-shim). This runs on EXIT (success or failure) and uses
+# the process group so we kill node too (the bash wrapper exec's
+# into node).
+cleanup_shim() {
+  if [[ $SHIM_STARTED -eq 1 ]] && [[ $KEEP_SHIM -eq 0 ]] && [[ -n "$SHIM_PID" ]]; then
+    # Kill the whole process group; the shim wrapper does `exec node`
+    # so the bash PID is the same as the node PID, but defensive.
+    kill -- "-$SHIM_PID" 2>/dev/null || kill "$SHIM_PID" 2>/dev/null || true
+    # Also catch any node children if the wrapper forked instead.
+    pkill -P "$SHIM_PID" 2>/dev/null || true
+  fi
+}
+trap 'cleanup_shim; [[ $KEEP -eq 0 ]] && rm -rf "$TMP"' EXIT
+
+# ---------------------------------------------------------------------------
 # 1. TTS via tts-minimax.mjs → MP3
 # ---------------------------------------------------------------------------
 
-TMP=$(mktemp -d)
-trap '[[ $KEEP -eq 0 ]] && rm -rf "$TMP"' EXIT
+# (TMP was already created earlier for the shim log; no need to recreate)
+trap 'cleanup_shim; [[ $KEEP -eq 0 ]] && rm -rf "$TMP"' EXIT
 
 echo "smoke-test: stage 1/3 — TTS via tts-minimax.mjs (voice=$VOICE model=$MODEL)"
 if ! node "$(dirname "$0")/tts-minimax.mjs" \
