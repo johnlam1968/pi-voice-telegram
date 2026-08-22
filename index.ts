@@ -13,6 +13,21 @@
  *         Bridge version requirement: present in 0.28.0+ (verified via
  *         `node_modules/@llblab/pi-telegram/lib/voice.ts:64`).
  *
+ * v0.18.1: house-keeping. The inbound STT + 🎙️ echo pipeline was
+ *         moved to the new `pi-telegram-stt` sister extension (was
+ *         `pi-telegram-echo`; renamed so the package name matches its
+ *         scope — the 🎙️ echo is one feature, not the package's
+ *         purpose). The main package no longer ships `echo.ts` and no
+ *         longer registers a voice transcription provider; the
+ *         `pi-voice-telegram/stt` id is gone. The
+ *         `inbound.echoEnabled` flag moves from the companion
+ *         config to `telegram.json#extensions["pi-telegram-stt"].echoEnabled`.
+ *         The dead `pi-telegram-settings` stub is deleted. This is a
+ *         breaking change for the running pi — the operator's
+ *         `telegram.json` and `~/.pi/agent/extensions/pi-telegram-echo.ts`
+ *         shim both need to be renamed to `pi-telegram-stt`. See the
+ *         v0.18.1 commit message for the full migration steps.
+ *
  * v0.17.0: provider-responsibility fixes per the 2026-08-19 upstream
  *         convention audit. (1) Drop the false `rate` claim from the
  *         layered-defaults docstring in synthesis-provider.ts (the
@@ -204,16 +219,8 @@ import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { registerTelegramVoiceSynthesisProvider } from "@llblab/pi-telegram/voice";
-import { registerTelegramUpdateHandler } from "@llblab/pi-telegram/updates";
-import { registerTelegramVoiceTranscriptionProvider } from "@llblab/pi-telegram/voice";
 
 import { createMmTtsSynthesisProvider } from "./synthesis-provider.js";
-import {
-	clearSttState,
-	handleTelegramUpdateForEcho,
-	handleTelegramVoiceTranscription,
-	setSttDefaults,
-} from "./echo.js";
 import {
 	loadCompanionConfig,
 	resolveSttDefaults,
@@ -263,17 +270,17 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 	 *     metadata; no behavior change).
 	 */
 	const reconfigure = (): void => {
-		// Tear down previous registrations + clear the in-memory
-		// transcript cache (the new echoEnabled flag should take
-		// effect on the very next message, with a fresh cache).
+		// Tear down previous registrations.
 		disposers.forEach((d: () => void) => d());
 		disposers = [];
-		clearSttState();
 
 		const cfg = loadCompanionConfig();
 
 		// Resolve per-extension TTS/STT defaults on every
 		// reconfigure so hot-reload picks up new JSON values.
+		// sttDefaults is consumed by the transcribe_audio LLM tool
+		// below; the inbound STT + 🎙️ echo pipeline lives in the
+		// `pi-telegram-stt` sister extension (not in this package).
 		const ttsDefaults = resolveTtsDefaults(cfg);
 		const sttDefaults = resolveSttDefaults(cfg);
 
@@ -281,6 +288,14 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 		// it wants a voice reply (driven by voice.replyMode + the
 		// LLM's reply). The provider is re-created on every
 		// reconfigure so it picks up the latest resolved defaults.
+		//
+		// Note: the inbound STT + 🎙️ echo pipeline was moved to the
+		// `pi-telegram-stt` sister extension in v0.18.1. The main
+		// package no longer registers a voice transcription provider;
+		// the sister extension is the single source of truth. Avoid
+		// re-introducing a duplicate `registerTelegramVoiceTranscriptionProvider`
+		// here — the bridge's provider chain would then have two
+		// providers and every voice message would be transcribed twice.
 		disposers.push(
 			registerTelegramVoiceSynthesisProvider(
 				createMmTtsSynthesisProvider({ tts: ttsDefaults }),
@@ -288,27 +303,6 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			),
 		);
 
-		// (2) Inbound echo — default on, opt-out via
-		// `inbound.echoEnabled: false`.
-		//
-		// v0.16.7: redesigned to use the bridge's voice-transcription
-		// provider hook. The bridge downloads the file (reliable path),
-		// calls our provider during `processTelegramInboundHandlers`,
-		// and includes the returned transcript in the user message.
-		// We transcribe the bridge's file (one transcription, no
-		// duplicate work) and send the `🎙️` echo to the user from
-		// the same code path. The update handler is minimal — it
-		// stashes the chat ID (which the provider doesn't get) keyed
-		// by file name, so the provider can route the echo.
-		if (cfg.inbound?.echoEnabled !== false) {
-			setSttDefaults(sttDefaults);
-			disposers.push(registerTelegramUpdateHandler(handleTelegramUpdateForEcho));
-			disposers.push(
-				registerTelegramVoiceTranscriptionProvider(handleTelegramVoiceTranscription, {
-					id: "pi-voice-telegram/stt",
-				}),
-			);
-		}
 
 		// (3) LLM tool surface — opt-in via `llm_tools.exposed: true`,
 		//     then gated per-tool by `llm_tools.tools.<name>`. Each tool
@@ -427,6 +421,5 @@ export default function piVoiceTelegram(pi: ExtensionAPI): void {
 			configWatcher.close();
 			configWatcher = null;
 		}
-		clearSttState();
 	});
 }

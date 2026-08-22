@@ -104,11 +104,12 @@ function splitKey(dotted: string): ValidatedKey {
 				`$schema and _hint are managed by the extension; they are not operator-tunable.`,
 		);
 	}
-	const knownRoots = new Set(["inbound", "tools", "tts", "stt"]);
+	const knownRoots = new Set(["tools", "tts", "stt"]);
 	if (!knownRoots.has(root)) {
 		throw new Error(
 			`config: unknown top-level key '${root}'. ` +
-				`Allowed: inbound, tools, tts, stt. To add a new knob, update the schema in pi-voice-telegram.schema.json first.`,
+				`Allowed: tools, tts, stt. To add a new knob, update the schema in pi-voice-telegram.schema.json first. ` +
+				`(v0.18.1: 'inbound' was moved to the pi-telegram-stt sister extension as 'extensions[pi-telegram-stt].echoEnabled'.)`,
 		);
 	}
 	return { root, remainder: segments.slice(1) };

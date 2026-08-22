@@ -144,7 +144,7 @@ export class OpenAiSttError extends Error {
  *  one-off overrides (CI, container runs).
  *
  *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
- *  `pi-telegram-echo`'s `getAgentDir()` pattern). */
+ *  `pi-telegram-stt`'s `getAgentDir()` pattern). */
 function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: string } {
 	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const configPath = join(dir, "telegram.json");
@@ -185,7 +185,7 @@ function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: st
  *  the key in `auth.json` (which the LLM provider also reads).
  *
  *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
- *  `pi-telegram-echo`'s `getAgentDir()` pattern). */
+ *  `pi-telegram-stt`'s `getAgentDir()` pattern). */
 function readOpenAiKeyFromAuthJson(): string | undefined {
 	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
 	const authPath = join(dir, "auth.json");

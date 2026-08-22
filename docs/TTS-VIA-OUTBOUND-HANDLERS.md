@@ -430,10 +430,11 @@ toggle them by commenting/uncommenting.
 For a side-by-side comparison of the two scripts, see the table
 in the TL;DR above.
 
-## The STT side is unchanged
+## The STT side is unchanged (with one rename)
 
-`pi-telegram-echo` (orchestrator) + `pi-openai-stt` (provider) are
-unchanged. The STT pipeline still uses the bridge's
+`pi-telegram-stt` (orchestrator, renamed from `pi-telegram-echo` in
+v0.18.1) + `pi-openai-stt` (provider) are unchanged. The STT
+pipeline still uses the bridge's
 `registerTelegramVoiceTranscriptionProvider` seam because the transcription
 needs the agent to receive the text via the normal prompt machinery (not
 a shell command). cURL for STT would mean the agent never sees the
@@ -449,12 +450,11 @@ following were deleted from the repo:
 - `extensions/pi-openai-tts/` — OpenAI-compatible provider package
 - `~/.pi/agent/extensions/{pi-telegram-tts-minimax,pi-minimax-tts,pi-openai-tts}.ts` — on-host shims
 
-What stayed:
+What stayed (then later house-kept in v0.18.1):
 
-- `extensions/pi-telegram-echo/` — STT orchestrator
+- `extensions/pi-telegram-stt/` — STT orchestrator (renamed from `pi-telegram-echo`)
 - `extensions/pi-openai-stt/` — STT provider (works against local whisper-server or OpenAI's `/v1/audio/transcriptions` via `base_url` config)
-- `extensions/pi-telegram-settings/` — LLM-callable `config_read` / `config_write` / `config_reset` tools (independent of voice; useful for editing `telegram.json` itself)
-- `scripts/list-tts-voices.ts` — CLI to enumerate MiniMax voices (was useful when the section UI was the picker; now mostly historical — keep the script for catalog inspection)
+- `extensions/pi-telegram-settings/` was a TODO stub — **deleted in v0.18.1** (never implemented; only referenced in `archive/PLAN.md` as future work)
 - `docs/MINIMAX-T2A-FINDINGS.md` — 1723-line investigation of the T2A API. The
   endpoints, response shapes, and ffmpeg settings in the script come from
   this doc; it's still the authoritative reference.

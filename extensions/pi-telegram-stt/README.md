@@ -1,16 +1,16 @@
-# pi-telegram-echo
+# pi-telegram-stt
 
 Voice echo extension for the Pi coding agent + [@llblab/pi-telegram](https://github.com/llblab/pi-telegram) bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages.
 
-**STT is delegated to a peer-dep provider extension**. The default is [`pi-openai-stt`](../pi-openai-stt/README.md) — a single provider that talks to any OpenAI-compatible gateway (OpenAI's actual API, the local `fw-openai-sts` shim, `faster-whisper-server`, etc.) with a fallback-chain config. The provider is selected via `extensions["pi-telegram-echo"].stt_provider` in `telegram.json`. The provider contract lives in `./stt-provider.ts`; any extension that implements it can plug in.
+**STT is delegated to a peer-dep provider extension**. The default is [`pi-openai-stt`](../pi-openai-stt/README.md) — a single provider that talks to any OpenAI-compatible gateway (OpenAI's actual API, the local `fw-openai-sts` shim, `faster-whisper-server`, etc.) with a fallback-chain config. The provider is selected via `extensions["pi-telegram-stt"].stt_provider` in `telegram.json`. The provider contract lives in `./stt-provider.ts`; any extension that implements it can plug in.
 
 ## Install
 
-On-host dev loader (one-liner re-export shim) for `pi-telegram-echo`:
+On-host dev loader (one-liner re-export shim) for `pi-telegram-stt`:
 
 ```bash
-cat > ~/.pi/agent/extensions/pi-telegram-echo.ts <<'EOF'
-export { default } from "/path/to/this/repo/extensions/pi-telegram-echo/index.ts";
+cat > ~/.pi/agent/extensions/pi-telegram-stt.ts <<'EOF'
+export { default } from "/path/to/this/repo/extensions/pi-telegram-stt/index.ts";
 EOF
 ```
 
@@ -22,9 +22,9 @@ export { default } from "/path/to/this/repo/extensions/pi-openai-stt/index.ts";
 EOF
 ```
 
-The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source. An absolute path keeps the source's relative imports (`../pi-telegram-echo/stt-provider.js` to reach the contract) resolvable from the source dir.
+The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source. An absolute path keeps the source's relative imports (`../pi-telegram-stt/stt-provider.js` to reach the contract) resolvable from the source dir.
 
-For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-echo` and `pi-openai-stt` from `~/.pi/agent/npm/`.
+For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-stt` and `pi-openai-stt` from `~/.pi/agent/npm/`.
 
 ## Configure
 
@@ -33,7 +33,7 @@ Edit `~/.pi/agent/telegram.json`:
 ```json
 {
   "extensions": {
-    "pi-telegram-echo": {
+    "pi-telegram-stt": {
       "echoEnabled": true,
       "stt_provider": "pi-openai-stt"
     },
@@ -59,7 +59,7 @@ The on-host CUDA `whisper-server` runs behind the `fw-openai-sts` shim — same 
 A provider is a Pi extension that calls `registerSttProvider(provider)` at module load with an `SttProvider` instance:
 
 ```typescript
-import { registerSttProvider, unregisterSttProvider, type SttProvider } from "pi-telegram-echo/stt-provider";
+import { registerSttProvider, unregisterSttProvider, type SttProvider } from "pi-telegram-stt/stt-provider";
 
 const provider: SttProvider = {
   id: "my-stt",

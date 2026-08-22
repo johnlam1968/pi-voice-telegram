@@ -1,5 +1,5 @@
 /**
- * pi-telegram-echo — entry point.
+ * pi-telegram-stt — entry point.
  *
  * ## Version history
  *
@@ -58,11 +58,11 @@
  *         `stt_provider: "pi-openai-stt"`.
  *
  * v0.3.1 — fix the v0.3.0 load-order race. The on-host test
- *         surfaced: `pi-telegram-echo` session_start fired first
+ *         surfaced: `pi-telegram-stt` session_start fired first
  *         (registering the echo handler), the bridge processed
  *         a voice message, and the STT provider's session_start
  *         fired LATER. The first voice message saw an empty
- *         registry (`pi-telegram-echo/stt` `provider-missing`
+ *         registry (`pi-telegram-stt/stt` `provider-missing`
  *         event). v0.3.1 fixes this by moving the provider
  *         registration to module load (top-level side effect in
  *         the provider's `index.ts`); the provider is in the
@@ -171,7 +171,7 @@ import { registerEchoHandlers } from "./echo-handler.js";
 import { registerEchoSection } from "./echo-section.js";
 import { loadEchoConfig } from "./telegram-config.js";
 
-const log = makeLogger("pi-telegram-echo");
+const log = makeLogger("pi-telegram-stt");
 
 export default function piTelegramEcho(pi: ExtensionAPI): void {
 	let handlerDisposers: Array<() => void> = [];

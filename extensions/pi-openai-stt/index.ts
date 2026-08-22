@@ -14,10 +14,10 @@
  * auth.json. Recommended way to switch between local and cloud.
  *
  * v0.4.0–v0.4.3: a standalone Pi extension that registers itself in
- * `pi-telegram-echo`'s STT provider registry (id `"pi-openai-stt"`)
+ * `pi-telegram-stt`'s STT provider registry (id `"pi-openai-stt"`)
  * at module load. The operator selects it via
- * `extensions["pi-telegram-echo"].stt_provider: "pi-openai-stt"` in
- * `telegram.json`. `pi-telegram-echo` looks the provider up at STT
+ * `extensions["pi-telegram-stt"].stt_provider: "pi-openai-stt"` in
+ * `telegram.json`. `pi-telegram-stt` looks the provider up at STT
  * call time so load-order doesn't matter.
  *
  * The same provider code talks to:
@@ -39,7 +39,7 @@
  * `pi-whisper-stt` v0.3.1: the provider is in the registry
  * synchronously when jiti loads the file, before any session_start
  * fires, before any message is processed. The registry lives on
- * `globalThis` (set up in `pi-telegram-echo/stt-provider.ts`) so it's
+ * `globalThis` (set up in `pi-telegram-stt/stt-provider.ts`) so it's
  * shared across all jiti instances in the same Node process.
  */
 
@@ -51,7 +51,7 @@ import {
 	ProviderError,
 	type SttProvider,
 	type SttRequest,
-} from "../pi-telegram-echo/stt-provider.js";
+} from "../pi-telegram-stt/stt-provider.js";
 
 import { transcribe, OpenAiSttError } from "./openai-stt.js";
 

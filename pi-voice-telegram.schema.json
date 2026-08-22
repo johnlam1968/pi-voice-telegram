@@ -10,19 +10,6 @@
 			"type": "string",
 			"description": "Free-form hint string. Ignored by the extension. Use as a place for an at-a-glance reminder of where the docs are; the extension never reads this field, but humans and LLMs inspecting the file will see it."
 		},
-		"inbound": {
-			"type": "object",
-			"description": "Controls the inbound voice/audio echo pipeline (downloads voice notes, runs STT via whisper-server, sends a 🎙️ echo to the user, and feeds the transcript into the agent prompt).",
-			"additionalProperties": false,
-			"properties": {
-				"echoEnabled": {
-					"type": "boolean",
-					"default": true,
-					"description": "When false, skip the inbound echo + transcript-injection handlers entirely. The bridge still receives the voice message, but the agent never sees a transcript and the user never sees the 🎙️ confirmation. Set this to false to fully disable the deterministic inbound STT pipeline (e.g. if you only want the LLM-callable transcribe_audio tool to do STT on demand).",
-					"examples": [true, false]
-				}
-			}
-		},
 		"llm_tools": {
 			"type": "object",
 			"description": "Controls the LLM-callable tool surface. The bridge's `telegram_attach` and `telegram_message` are always available; the companion's 7 LLM tools are gated on these flags. The `llm_tools.` namespace makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features (which run unconditionally; only their LLM-tool wrappers are gated here).",

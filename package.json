@@ -1,6 +1,6 @@
 {
   "name": "pi-voice-telegram",
-  "version": "0.18.0",
+  "version": "0.18.1",
   "description": "Telegram voice/text companion extension for the Pi coding agent. Registers a TTS synthesis provider (mm-tts-backed by default) and a voice transcript echo for incoming voice/audio messages. Behavior is fully driven by the bridge's telegram.json config (voice.replyMode, voice.sendTranscript, etc.).",
   "type": "module",
   "license": "MIT",

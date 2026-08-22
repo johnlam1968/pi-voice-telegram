@@ -1,8 +1,8 @@
 # pi-openai-stt
 
-STT provider for any OpenAI-compatible API gateway. Companion to [`pi-telegram-echo`](../pi-telegram-echo/README.md).
+STT provider for any OpenAI-compatible API gateway. Companion to [`pi-telegram-stt`](../pi-telegram-stt/README.md).
 
-Implements the `SttProvider` contract from `pi-telegram-echo` and registers itself with id `"pi-openai-stt"` at module load. The operator selects it via `extensions["pi-telegram-echo"].stt_provider: "pi-openai-stt"` in `telegram.json`.
+Implements the `SttProvider` contract from `pi-telegram-stt` and registers itself with id `"pi-openai-stt"` at module load. The operator selects it via `extensions["pi-telegram-stt"].stt_provider: "pi-openai-stt"` in `telegram.json`.
 
 The same provider code talks to many backends by changing `base_url` (or `OPENAI_STT_BASE_URL`):
 
@@ -43,9 +43,9 @@ export { default } from "/path/to/this/repo/extensions/pi-openai-stt/index.ts";
 EOF
 ```
 
-`pi-telegram-echo` and `pi-openai-stt` must both be loaded by the agent. Order doesn't matter — the provider is looked up at STT call time, not at registration time (v0.3.1 load-order race fix).
+`pi-telegram-stt` and `pi-openai-stt` must both be loaded by the agent. Order doesn't matter — the provider is looked up at STT call time, not at registration time (v0.3.1 load-order race fix).
 
-For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-echo` and `pi-openai-stt` from `~/.pi/agent/npm/`.
+For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-stt` and `pi-openai-stt` from `~/.pi/agent/npm/`.
 
 ## Configure
 
@@ -54,7 +54,7 @@ For the cluster install path, `npm install file:/path/to/this/dir` for each of `
 ```json
 {
   "extensions": {
-    "pi-telegram-echo": {
+    "pi-telegram-stt": {
       "echoEnabled": true,
       "stt_provider": "pi-openai-stt"
     },
@@ -119,7 +119,7 @@ fw-openai-sts &  # listens on 8081, forwards to 127.0.0.1:8080/inference
 
 # 3. Update telegram.json
 #    "extensions": {
-#      "pi-telegram-echo": { "echoEnabled": true, "stt_provider": "pi-openai-stt" },
+#      "pi-telegram-stt": { "echoEnabled": true, "stt_provider": "pi-openai-stt" },
 #      "pi-openai-stt":     { "base_url": "http://127.0.0.1:8081/v1" }
 #    }
 #    (No env vars needed; the local shim doesn't check api_key.)

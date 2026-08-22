@@ -67,16 +67,6 @@ export interface CompanionConfig {
 	 * inspect the file directly.
 	 */
 	_hint?: string;
-	/** Inbound voice/audio echo. Default: enabled. */
-	inbound?: {
-		/**
-		 * When false, skip the echo + transcript-injection handlers entirely.
-		 * The bridge still receives the voice message, but the agent never
-		 * sees a transcript and the user never sees the `🎙️` confirmation.
-		 * Default: true.
-		 */
-		echoEnabled?: boolean;
-	};
 	/** LLM tool surface. Default: not exposed (opt-in). */
 	llm_tools?: {
 		/**
@@ -279,8 +269,7 @@ export function resolveSttDefaults(cfg: CompanionConfig | undefined): ResolvedSt
  */
 const DEFAULT_CONFIG: CompanionConfig & Record<string, unknown> = {
 	$schema: "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/pi-voice-telegram.schema.json",
-	_hint: "pi-voice-telegram companion settings (v0.17.1+). Hot-reload is on — changes take effect on the next turn, no restart. TTS/STT defaults (tts.lang, tts.voice, tts.model, tts.lang, tts.verifyAfterSynthesize, stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access); THIS file controls the voice pipeline. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.16.8: tts.verifyAfterSynthesize default is false (was true in v0.16.0–v0.16.7); set to true to opt into a whisper-stt language-detection self-check on every synthesis that logs under `category: \"pi-voice-telegram/tts-verify\"`. v0.16.9: tools.enabled renamed to tools.exposed. v0.16.10: tools namespace renamed to llm_tools (the llm_tools. prefix makes it explicit that these switches gate the LLM tool surface, not the TTS/STT extension features). v0.16.12: per-tool gates under llm_tools.tools.<name> replace the v0.16.10 llm_tools.tts.enabled and llm_tools.stt.enabled shortcuts. Defaults: all 7 tools true when llm_tools.exposed is true; set a tool to false to hide it from the LLM. v0.17.0: provider-responsibility fixes (caption-truncated runtime event + voice/audio fileName contract fix + dropped the false `rate` claim from synthesis-provider.ts's docstring). v0.17.1: getVoicePromptContribution implemented; the bridge appends it to the LLM's prompt on voice-tagged turns (mirror + voice input, or always mode). No schema or behavior change for non-voice turns.",
-	inbound: { echoEnabled: true },
+	_hint: "pi-voice-telegram companion settings (v0.18.1+). Hot-reload is on — changes take effect on the next turn, no restart. TTS defaults (tts.lang, tts.voice, tts.model, tts.verifyAfterSynthesize) and STT defaults (stt.lang, stt.baseUrl) live HERE, NOT in telegram.json. telegram.json controls the bridge (chat/polling/role access) and the sibling extensions (extensions[\"pi-telegram-stt\"].echoEnabled / stt_provider for the inbound STT + 🎙️ echo). THIS file controls the synthesis pipeline + LLM tool surface. For valid voice IDs, see $schema (and the agent has a pi_voice_telegram_list_voices tool that returns the embedded 327-voice catalog). v0.18.1: house-keeping — the inbound STT + 🎙️ echo pipeline moved to the new `pi-telegram-stt` sister extension. The companion `inbound.echoEnabled` flag is gone; the echoEnabled flag now lives in telegram.json under `extensions[\"pi-telegram-stt\"].echoEnabled`. The dead `pi-telegram-settings` stub is deleted. v0.18.0: install fix — npm pack now ships the runtime scripts (tts-minimax, tts-openai, fw-openai-sts) and install.sh for clean self-contained setup. v0.17.0: provider-responsibility fixes (caption-truncated runtime event + voice/audio fileName contract fix + dropped the false `rate` claim from synthesis-provider.ts's docstring). v0.17.1: getVoicePromptContribution implemented; the bridge appends it to the LLM's prompt on voice-tagged turns (mirror + voice input, or always mode). No schema or behavior change for non-voice turns.",
 	llm_tools: {
 		exposed: false,
 		tools: {

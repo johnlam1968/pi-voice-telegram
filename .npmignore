@@ -1,0 +1,15 @@
+# .npmignore — secondary gate for `npm pack`.
+#
+# The `files` whitelist in package.json is the PRIMARY gate (it
+# whitelists the runtime files we want shipped). This file is the
+# secondary gate: it controls what `npm pack` excludes when the
+# whitelist happens to match something we don't want. Notably, npm's
+# "always include README variants" rule pulls in `scripts/README.md`
+# even though it's not in the whitelist — this file tells npm to
+# drop it.
+
+# Documentation in scripts/ — only the runtime scripts (tts-minimax,
+# tts-openai, fw-openai-sts) and install.sh should ship. The README
+# is for the dev tools (dev-status.sh, dev-watch.sh) which are NOT
+# in the npm package; they stay in the repo for development only.
+scripts/README.md

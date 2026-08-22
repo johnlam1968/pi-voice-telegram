@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Telegram voice/text companion extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono) and the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge. Registers a TTS synthesis provider (mm-tts-backed by default) and a voice-transcript echo for incoming voice/audio messages; opt-in LLM tools for synthesis, transcription, schema discovery, and config read/write/reset.
+Telegram voice/text companion extension for the [Pi coding agent](https://github.com/earendil-works/pi-mono) and the [`@llblab/pi-telegram`](https://github.com/llblab/pi-telegram) bridge. Registers a TTS synthesis provider (mm-tts-backed by default) for outbound voice replies. The inbound STT + 🎙️ echo pipeline lives in the sister extension `pi-telegram-stt` (was `pi-telegram-echo` before v0.18.1; renamed so the package name matches its scope). Opt-in LLM tools for synthesis, transcription, schema discovery, and config read/write/reset.
 
 ## Setup commands
 
@@ -57,13 +57,16 @@ only after the extension work is verified end-to-end.
 - `voice-reply.ts` — voice-reply orchestrator (provider call + ffmpeg encode + caption assembly)
 - `mm-tts.ts` — MiniMax T2A HTTP client
 - `whisper-stt.ts` — pure-TypeScript HTTPS client for `whisper-server /inference`
-- `echo.ts` — inbound voice/audio message detection + transcript echo back to the user
 - `tools.ts` — opt-in LLM tool surface (`synthesize_voice`, `transcribe_audio`, schema, config read/write/reset)
-- `voices-catalog.ts`, `voices.json` — voice catalog (built by `scripts/build-voice-catalog.py`)
+- `voices-catalog.ts`, `voices.json` — voice catalog (built by `archive/scripts/build-voice-catalog.py`)
 - `pi-voice-telegram.schema.json` — JSON Schema for the companion settings file; source of truth for field names, types, and defaults
+- `extensions/pi-telegram-stt/` — sister extension: inbound STT + 🎙️ echo (renamed from `pi-telegram-echo` in v0.18.1)
+- `extensions/pi-openai-stt/` — sister extension: STT provider that talks to any OpenAI-compatible API gateway
+- `extensions/_logger.ts` — shared stderr logger for both sister extensions
+- `install.sh` — clean-install one-command script (symlinks runtime scripts, runs `npm install`, prints the recommended `telegram.json#outboundHandlers` template)
 - `archive/` — investigation findings, superseded test scripts, design history, and bug filings. Excluded from `npm install`. See `archive/README.md` for the full index.
 - `docs/` — operator-facing long-form notes (`DEBUGGING.md`, `DESIGN-INTENT.md`, `TTS-VIA-OUTBOUND-HANDLERS.md`)
-- `scripts/` — runtime + debug scripts. The runtime ones (`tts-minimax.mjs`, `tts-openai.mjs`, `fw-openai-sts.ts`) are referenced by `telegram.json` or installed to `~/.pi/agent/bin/`; the debug ones (`dev-status.sh`, `dev-watch.sh`) are the daily dev kit.
+- `scripts/` — runtime scripts only (`tts-minimax.mjs`, `tts-openai.mjs`, `fw-openai-sts.ts` — all referenced by `telegram.json#outboundHandlers[0].template` or installed to `~/.pi/agent/bin/`). The dev tools (`dev-status.sh`, `dev-watch.sh`) live in `scripts/` too — they're the daily debug kit.
 
 ## Code style
 
@@ -74,11 +77,12 @@ only after the extension work is verified end-to-end.
 
 ## Testing instructions
 
-- There is no automated test runner. Validation is manual via `scripts/`:
-  - `scripts/live-test.sh` — end-to-end against a running agent + bridge (requires `ffmpeg`, `whisper-server`, valid TTS creds)
-  - `scripts/test-v0.16.7-provider.ts` — provider-shape smoke test
-- When changing `mm-tts.ts` or `voice-reply.ts`, run the live test against a real provider before considering the change done.
-- When changing `pi-voice-telegram.schema.json` or `config-io.ts`, add a migration note in `PLAN.md` and verify an older settings file round-trips through the new schema.
+- There is no automated test runner. The dev tools are in `scripts/`:
+  - `scripts/dev-status.sh` — one-shot status snapshot (process, lock state, polling, runtime events, stderr)
+  - `scripts/dev-watch.sh` — refresh every 2s (or `tail` of bridge + session + stderr)
+- When changing `mm-tts.ts` or `voice-reply.ts`, test against a real provider (MiniMax or OpenAI) before considering the change done.
+- When changing `pi-voice-telegram.schema.json` or `config-io.ts`, verify an older settings file round-trips through the new schema.
+- For historical tests (`live-test.sh`, `test-v0.16.7-provider.ts`, `build-voice-catalog.py`), see `archive/scripts/`.
 
 ## PR & commit conventions
 

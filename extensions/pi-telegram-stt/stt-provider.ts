@@ -4,7 +4,7 @@
  * Any Pi extension can implement `SttProvider` and register itself with
  * `registerSttProvider(provider)` on `session_start` (or at module load,
  * for early registration — see "load-order race" below).
- * `pi-telegram-echo` looks up the configured provider by `id` at STT
+ * `pi-telegram-stt` looks up the configured provider by `id` at STT
  * call time (not at registration time) to avoid load-order coupling.
  *
  * One provider ships in this repo (since v0.5.0 retired `pi-whisper-stt`):
@@ -32,12 +32,12 @@
  * ## Load-order race (v0.3.0 → v0.3.1)
  *
  * In v0.3.0 the provider was registered on `session_start`. The
- * on-host test surfaced a race: `pi-telegram-echo` session_start
+ * on-host test surfaced a race: `pi-telegram-stt` session_start
  * fired first (registering the echo handler), the bridge then
  * started processing a voice message, and the STT provider's
  * session_start fired LATER. The first voice message saw an
  * empty registry and the echo recorded a
- * `pi-telegram-echo/stt` `provider-missing` event. v0.3.1 fixes
+ * `pi-telegram-stt/stt` `provider-missing` event. v0.3.1 fixes
  * this by registering at module load (top-level side effect):
  * jiti evaluates the file synchronously, so the provider is in
  * the registry before any session_start fires, before any message

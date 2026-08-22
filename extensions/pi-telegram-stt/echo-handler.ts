@@ -49,7 +49,7 @@ import { makeLogger } from "../_logger.js";
 
 import type { EchoConfig } from "./telegram-config.js";
 
-const log = makeLogger("pi-telegram-echo/stt");
+const log = makeLogger("pi-telegram-stt/stt");
 
 /** chat-id-by-filename map. Populated by the update handler, consumed
  *  by the STT provider. Cleaned up in the provider's `finally` after
@@ -155,7 +155,7 @@ async function transcribeAndMaybeEcho(
 			installed: listSttProviders().map((p) => p.id),
 		});
 		recordTelegramRuntimeEvent(
-			"pi-telegram-echo/stt",
+			"pi-telegram-stt/stt",
 			new Error(
 				`STT provider "${sttProviderId}" is not registered. ` +
 					`Installed providers: ${listSttProviders().map((p) => p.id).join(", ") || "(none)"}. ` +
@@ -180,7 +180,7 @@ async function transcribeAndMaybeEcho(
 		const detail = err instanceof ProviderError ? err.detail : undefined;
 		log.error("transcribe failed", { provider: provider.id, code, detail: detail ? JSON.stringify(detail) : undefined, error: err instanceof Error ? err.message : String(err) });
 		recordTelegramRuntimeEvent(
-			"pi-telegram-echo/stt",
+			"pi-telegram-stt/stt",
 			err instanceof Error ? err : new Error(String(err)),
 			{
 				phase: "run",
@@ -216,7 +216,7 @@ async function transcribeAndMaybeEcho(
 			} catch (err) {
 				log.error("echo send failed", { chatId, error: err instanceof Error ? err.message : String(err) });
 				recordTelegramRuntimeEvent(
-					"pi-telegram-echo/echo",
+					"pi-telegram-stt/echo",
 					err instanceof Error ? err : new Error(String(err)),
 					{ phase: "send", chatId, transcriptLength: transcript.length },
 				);
@@ -270,7 +270,7 @@ export function registerEchoHandlers(cfg: EchoConfig): Array<() => void> {
 					cfg.echoEnabled,
 					cfg.stt_provider,
 				),
-			{ id: "pi-telegram-echo/stt" },
+			{ id: "pi-telegram-stt/stt" },
 		),
 	);
 

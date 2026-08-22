@@ -25,7 +25,7 @@ import {
 
 export function registerEchoSection(): () => void {
 	return registerTelegramSection({
-		id: "pi-telegram-echo/echo",
+		id: "pi-telegram-stt/echo",
 		label: "🎙️ Echo",
 		order: 10,
 		getLabel: () => {

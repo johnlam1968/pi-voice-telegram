@@ -1,7 +1,7 @@
 /**
  * telegram-config.ts — read/write this extension's key in telegram.json.
  *
- * Persistence: `telegram.json` under `extensions["pi-telegram-echo"]`.
+ * Persistence: `telegram.json` under `extensions["pi-telegram-stt"]`.
  *
  * Schema-light: the operator-facing knobs are `echoEnabled` and
  * `stt_provider`. The STT provider is looked up in the in-process
@@ -34,7 +34,7 @@ export const DEFAULTS: EchoConfig = {
 	stt_provider: "pi-openai-stt",
 };
 
-const KEY = "pi-telegram-echo";
+const KEY = "pi-telegram-stt";
 
 function configPath(): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();

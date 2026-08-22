@@ -32,3 +32,10 @@ archive/docs/MINIMAX-T2A-FINDINGS.md
 archive/docs/TELEGRAM-VOICE-ECHO-FINDINGS.md
 archive/docs/CODE-FLOW.md
 archive/docs/PI-TELEGRAM-BRIDGE-NOTES.md
+
+# scripts/README.md — documents the dev tools (dev-status.sh, dev-watch.sh)
+# that are NOT in the npm package (the runtime scripts are tts-minimax.mjs
+# etc., which ARE in the package). Excluding it from git/npm also stops
+# npm's "always include README variants" rule from pulling it into the
+# tarball via the `files` whitelist.
+scripts/README.md
