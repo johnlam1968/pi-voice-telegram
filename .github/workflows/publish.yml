@@ -59,15 +59,23 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to publish (e.g., 0.7.0). Leave blank to use the tag version (tag push only).'
-        required: false
-        type: string
+    # Manual trigger for the very first publish (when the packages
+    # don't exist on npm yet and OIDC trusted publishing can't be
+    # configured). After the first publish, switch to tag pushes.
+    # Add an NPM_TOKEN secret to the repo for the first publish:
+    #   1. Go to https://www.npmjs.com/settings/<user>/tokens
+    #   2. Generate a NEW token, "Automation" type, publish scope
+    #      (NOT "bypass 2FA" — that permission is gone as of npm v12)
+    #   3. Add it as a repo secret: gh secret set NPM_TOKEN
+    #   4. Run this workflow via the Actions tab → Publish to npm → Run workflow
+    # After the first publish, configure Trusted Publishing per
+    # package on npmjs.com (Package → Settings → Trusted Publishers)
+    # and the workflow will use OIDC instead — NPM_TOKEN is ignored
+    # once trusted publishing is set.
 
 permissions:
   contents: write   # for the GitHub Release
-  id-token: write   # for npm OIDC provenance
+  id-token: write   # for npm OIDC provenance (used after trusted publishing is configured)
 
 jobs:
   publish:
@@ -91,61 +99,59 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Determine version to publish
-        id: version
+      - name: Print current versions of the 3 packages
         run: |
-          # Three sources of truth, in priority order:
-          # 1. workflow_dispatch input (manual run)
-          # 2. The tag name (push of v*)
-          # 3. Each package's package.json (fallback)
-          if [[ -n "${{ inputs.version }}" ]]; then
-            VERSION="${{ inputs.version }}"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            # github.ref_name is like "v0.7.0"; strip the v
-            VERSION="${GITHUB_REF_NAME#v}"
-          else
-            # Fall back to the source-of-truth: the anchor
-            # package's version. We use pi-telegram-stt as the
-            # anchor because it's the last-published in dependency
-            # order.
-            VERSION=$(node -p "require('./extensions/pi-telegram-stt/package.json').version")
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Publishing version: $VERSION"
+          # The 3 packages are published at their current versions
+          # — they're independent packages with independent semver.
+          # The tag (if any) is just a release marker, not a
+          # version enforcer. This is intentional: the new design
+          # is one repo, 3 packages, each at its own version.
+          echo "Publishing the 3 sister packages at their current versions:"
+          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt; do
+            ver=$(node -p "require('./extensions/${pkg}/package.json').version")
+            echo "  ${pkg}@${ver}"
+          done
 
-      - name: Verify all 3 packages are at the target version
+      - name: Validate every package.json has a valid semver version
         run: |
-          target="${{ steps.version.outputs.version }}"
           failed=0
           for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt; do
-            actual=$(node -p "require('./extensions/${pkg}/package.json').version")
-            if [[ "$actual" != "$target" ]]; then
-              echo "::error::${pkg} is at ${actual}, expected ${target}"
+            ver=$(node -p "require('./extensions/${pkg}/package.json').version")
+            if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
+              echo "::error::${pkg} has invalid version: ${ver}"
               failed=1
-            else
-              echo "ok: ${pkg}@${actual}"
             fi
           done
           if [[ $failed -ne 0 ]]; then
-            echo "::error::One or more packages are at the wrong version."
-            echo "::error::Run \`cd extensions/<pkg> && npm version <target>\` for each, then commit."
+            echo "::error::One or more packages have invalid semver. Run \`cd extensions/<pkg> && npm version <X.Y.Z>\` for each."
             exit 1
           fi
 
       - name: Publish pi-voice-telegram-scripts (leaves first, no peer deps)
         run: |
           cd extensions/pi-voice-telegram-scripts
+          # OIDC trusted publishing takes precedence when configured
+          # per-package on npmjs.com. NODE_AUTH_TOKEN is the fallback
+          # for the very first publish (and the operator's bootstrap
+          # token if NPM_TOKEN is set as a repo secret). After trusted
+          # publishing is set up, NPM_TOKEN is ignored.
           npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-openai-stt
         run: |
           cd extensions/pi-openai-stt
           npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-telegram-stt (anchor)
         run: |
           cd extensions/pi-telegram-stt
           npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
