@@ -12,15 +12,34 @@
 # but the README references the order anyway.
 #
 # Usage:
-#   ./scripts/publish.sh                 # publish each package, then git tag
-#   ./scripts/publish.sh --dry-run      # run `npm publish --dry-run` for each
-#   ./scripts/publish.sh --skip-git     # publish but don't tag or commit
+#   ./scripts/publish.sh                                  # publish each package, then git tag
+#   ./scripts/publish.sh --dry-run                       # run `npm publish --dry-run` for each
+#   ./scripts/publish.sh --skip-git                      # publish but don't tag or commit
 #   ./scripts/publish.sh --only pi-voice-telegram-scripts   # publish a subset
+#   ./scripts/publish.sh --otp <6-digit-code>            # provide the 2FA OTP inline
+#   NPM_CONFIG_OTP=<6-digit-code> ./scripts/publish.sh    # same, via env var
+#
+# 2FA (npm v12+):
+#   As of npm v12, granular access tokens with the "bypass 2FA"
+#   permission can no longer publish directly — they can only stage
+#   a publish (which a maintainer then approves with 2FA) or read
+#   private packages. To publish from the CLI, you need an
+#   interactive 2FA challenge. Pass the OTP from your authenticator
+#   app via --otp or NPM_CONFIG_OTP. (See
+#   https://github.blog/changelog/2026-07-08-...-gat-bypass2fa-deprecation/
+#   for the full deprecation timeline — January 2027 is the target
+#   for the last bastion of 2FA-bypass tokens.)
+#
+#   The long-term migration path is Trusted Publishing via OIDC
+#   (GitHub Actions issues short-lived tokens to npm on your behalf;
+#   no stored secret, no 2FA prompt). That's the recommended
+#   setup for CI; this script is for local / one-off publishes.
 #
 # Prerequisites (one-time):
 #   1. `npm login` once on the host (or set NPM_TOKEN in env)
 #   2. Bump the version in the package's package.json (manual or
 #      `npm version patch` in the package's directory)
+#   3. Have your authenticator app ready to read the 6-digit code
 #
 # The script refuses to publish a package whose `version` is already
 # on the npm registry at the same version (npm itself errors, but
@@ -44,14 +63,16 @@ DRY_RUN=0
 SKIP_GIT=0
 ONLY=()
 ALL_PACKAGES=(pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt)
+OTP=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --skip-git) SKIP_GIT=1; shift ;;
     --only) shift; while [[ $# -gt 0 && "$1" != --* ]]; do ONLY+=("$1"); shift; done ;;
+    --otp) OTP="$2"; shift 2 ;;
     -h|--help)
-      sed -n '2,32p' "$0"
+      sed -n '2,38p' "$0"
       exit 0 ;;
     *) echo "publish.sh: unknown arg: $1" >&2; exit 2 ;;
   esac
@@ -60,6 +81,17 @@ done
 # Default --only to all packages if not specified
 if [[ ${#ONLY[@]} -eq 0 ]]; then
   ONLY=("${ALL_PACKAGES[@]}")
+fi
+
+# If --otp wasn't given, fall back to the NPM_CONFIG_OTP env var
+# (npm's own convention for non-interactive 2FA). Either way, export
+# it so the child `npm publish` calls pick it up. Empty string means
+# no OTP — npm will then prompt interactively (or fail with the
+# 403 the user just hit).
+if [[ -n "$OTP" ]]; then
+  export NPM_CONFIG_OTP="$OTP"
+elif [[ -n "${NPM_CONFIG_OTP:-}" ]]; then
+  OTP="$NPM_CONFIG_OTP"
 fi
 
 # ---------------------------------------------------------------------------
