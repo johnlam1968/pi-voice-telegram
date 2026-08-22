@@ -21,13 +21,14 @@ out/
 .env
 .env.local
 
-# Untracked reference docs from the agent-john workspace.
+# External reference docs from the agent-john workspace.
 # These are technical-investigation write-ups that travel with
 # the dev environment (the agent's `/workspace` mount) rather than
-# the code itself. They live in `docs/` for local reference and
-# are NOT tracked in git. To update them, replace the files in
-# `docs/` from the latest copy in the agent's workspace.
-docs/MINIMAX-T2A-FINDINGS.md
-docs/TELEGRAM-VOICE-ECHO-FINDINGS.md
-docs/CODE-FLOW.md
-docs/PI-TELEGRAM-BRIDGE-NOTES.md
+# the code itself. They live in `archive/docs/` for local reference
+# and are NOT tracked in git. To update them, replace the files in
+# `archive/docs/` from the latest copy in the agent's workspace.
+# See `archive/README.md` for the full archive contents.
+archive/docs/MINIMAX-T2A-FINDINGS.md
+archive/docs/TELEGRAM-VOICE-ECHO-FINDINGS.md
+archive/docs/CODE-FLOW.md
+archive/docs/PI-TELEGRAM-BRIDGE-NOTES.md

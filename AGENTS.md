@@ -20,9 +20,9 @@ Telegram voice/text companion extension for the [Pi coding agent](https://github
 - `tools.ts` — opt-in LLM tool surface (`synthesize_voice`, `transcribe_audio`, schema, config read/write/reset)
 - `voices-catalog.ts`, `voices.json` — voice catalog (built by `scripts/build-voice-catalog.py`)
 - `pi-voice-telegram.schema.json` — JSON Schema for the companion settings file; source of truth for field names, types, and defaults
-- `PLAN.md` — design history, decisions, in-flight work, schema-evolution notes
-- `docs/` — long-form notes (`CODE-FLOW.md`, `MINIMAX-T2A-FINDINGS.md`, `PI-TELEGRAM-BRIDGE-NOTES.md`, `TELEGRAM-VOICE-ECHO-FINDINGS.md`)
-- `scripts/` — manual/test helpers (`live-test.sh`, `test-v0.16.7-provider.ts`, `build-voice-catalog.py`)
+- `archive/` — investigation findings, superseded test scripts, design history, and bug filings. Excluded from `npm install`. See `archive/README.md` for the full index.
+- `docs/` — operator-facing long-form notes (`DEBUGGING.md`, `DESIGN-INTENT.md`, `TTS-VIA-OUTBOUND-HANDLERS.md`)
+- `scripts/` — runtime + debug scripts. The runtime ones (`tts-minimax.mjs`, `tts-openai.mjs`, `fw-openai-sts.ts`) are referenced by `telegram.json` or installed to `~/.pi/agent/bin/`; the debug ones (`dev-status.sh`, `dev-watch.sh`) are the daily dev kit.
 
 ## Code style
 
