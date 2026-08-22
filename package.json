@@ -57,6 +57,10 @@
   },
   "files": [
     "*.ts",
+    "install.sh",
+    "scripts/tts-minimax.mjs",
+    "scripts/tts-openai.mjs",
+    "scripts/fw-openai-sts.ts",
     "pi-voice-telegram.schema.json",
     "voices.json",
     "package.json",

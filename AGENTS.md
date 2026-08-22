@@ -4,9 +4,50 @@ Telegram voice/text companion extension for the [Pi coding agent](https://github
 
 ## Setup commands
 
-- No install step at the repo level. The package ships ESM TypeScript and is **jiti-loaded** by the host agent directly from `index.ts` — no build, no transpile, no bundle.
-- All runtime deps are **peer dependencies** (`@earendil-works/pi-coding-agent`, `@llblab/pi-telegram`, optional `@sinclair/typebox`). They must resolve inside the host agent's `node_modules`; this repo's own `node_modules/` only exists for editor IntelliSense.
-- The host agent also needs `ffmpeg` on `PATH` (libopus encode) and a reachable `whisper-server` for STT. See `README.md` for the canonical install path under `~/.pi/agent/npm/`.
+**Clean install** (recommended for a fresh host agent):
+```bash
+# 1. Clone the repo
+git clone https://github.com/johnlam1968/pi-voice-telegram.git
+cd pi-voice-telegram
+
+# 2. Run the install script — symlinks the runtime scripts to
+#    ~/.pi/agent/bin/, runs npm install for peer deps, prints the
+#    recommended telegram.json#outboundHandlers template
+./install.sh
+```
+
+**Development install** (if you're working on the package):
+```bash
+# Clone anywhere; the host agent loads it from this path
+git clone https://github.com/johnlam1968/pi-voice-telegram.git ~/path/to/repo
+cd ~/path/to/repo
+npm install   # pulls jiti for IntelliSense; peer deps live in the host agent
+```
+
+The package ships ESM TypeScript and is **jiti-loaded** by the host
+agent directly from `index.ts` — no build, no transpile, no bundle.
+All runtime deps are **peer dependencies** (`@earendil-works/pi-coding-agent`,
+`@llblab/pi-telegram`, optional `@sinclair/typebox`). They must
+resolve inside the host agent's `node_modules`; this repo's own
+`node_modules/` only exists for editor IntelliSense.
+
+The host agent also needs `ffmpeg` on `PATH` (libopus encode) and a
+reachable `whisper-server` for STT.
+
+## Branch workflow
+
+- **`master`** — the current stable release. Template-based TTS via
+  `telegram.json#outboundHandlers[0].template`. This is what the
+  operator's running `pi` should pin to.
+- **`dev/pi-telegram-stt`** — future work: a `pi-telegram-stt`
+  extension with the synthesis-candies layer, the `voice.synthesis`
+  discriminated-union config, and the fallback-chain runtime. The
+  design tensions around per-provider params live here. Don't
+  break the running setup.
+
+When a release is cut, tag the master commit (e.g. `v0.18.0`) and
+let `dev/pi-telegram-stt` continue to diverge. Merge back to master
+only after the extension work is verified end-to-end.
 
 ## Project layout
 
