@@ -45,7 +45,7 @@ import {
 	ProviderError,
 } from "./stt-provider.js";
 
-import { makeLogger } from "../_logger.js";
+import { makeLogger } from "./_logger.js";
 
 import type { EchoConfig } from "./telegram-config.js";
 

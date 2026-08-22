@@ -75,7 +75,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
 
-import { makeLogger } from "../_logger.js";
+import { makeLogger } from "./_logger.js";
 
 const log = makeLogger("pi-openai-stt/http");
 

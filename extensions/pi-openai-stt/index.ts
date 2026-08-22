@@ -55,7 +55,7 @@ import {
 
 import { transcribe, OpenAiSttError } from "./openai-stt.js";
 
-import { makeLogger } from "../_logger.js";
+import { makeLogger } from "./_logger.js";
 
 const log = makeLogger("pi-openai-stt");
 const PROVIDER_ID = "pi-openai-stt";

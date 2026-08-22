@@ -166,7 +166,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-import { makeLogger } from "../_logger.js";
+import { makeLogger } from "./_logger.js";
 import { registerEchoHandlers } from "./echo-handler.js";
 import { registerEchoSection } from "./echo-section.js";
 import { loadEchoConfig } from "./telegram-config.js";

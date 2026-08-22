@@ -8,7 +8,7 @@
  * is the canonical observability channel for our code.
  *
  * Usage:
- *   import { log, makeLogger } from "../_logger.js";
+ *   import { log, makeLogger } from "./_logger.js";
  *   log.debug("parsed args", { count: 3 });
  *   const log = makeLogger("pi-telegram-echo");
  *   log.info("synthesizing", { model: "speech-2.8-hd" });

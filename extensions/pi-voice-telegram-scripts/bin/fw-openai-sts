@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# fw-openai-sts — OpenAI-compatible STT shim for the local whisper-server.
+#
+# Wraps the TypeScript source at
+# $(dirname "$0")/../fw-openai-sts.ts
+# using Node's native --experimental-strip-types (no build, no jiti,
+# no external deps). Requires Node >= 22.6.
+#
+# Env vars (with defaults):
+#   FW_OPENAI_STS_PORT=8081                       # port to listen on (0 = OS picks)
+#   FW_OPENAI_STS_HOST=127.0.0.1                   # bind address
+#   FW_OPENAI_STS_UPSTREAM=http://127.0.0.1:8080 # the local whisper-server base URL
+
+set -e
+
+DIR="$(cd "$(dirname "$0")" && pwd)"
+exec node --experimental-strip-types "$DIR/../fw-openai-sts.ts" "$@"

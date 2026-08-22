@@ -1,7 +1,7 @@
 {
   "name": "pi-telegram-stt",
-  "version": "0.6.0",
-  "description": "STT orchestrator extension for the Pi coding agent + @llblab/pi-telegram bridge. Wraps the inbound voice/audio pipeline (downloads voice notes, runs STT via a peer-dep provider extension, sends a 🎙️ echo to the user, and feeds the transcript into the agent prompt). STT is delegated to a peer-dep provider extension (default: pi-openai-stt; the only one in the repo since v0.5.0) selected via extensions.pi-telegram-stt.stt_provider in telegram.json. The 🎙️ echo is one feature of this package, not its purpose — the package name is the scope (STT orchestration), not a single feature. The section is registered once per session so the in-Telegram menu buttons stay stable across hot-reloads. v0.6.0: renamed from pi-telegram-echo to pi-telegram-stt; the package's scope is STT, and echo is a feature within it.",
+  "version": "0.7.0",
+  "description": "STT orchestrator extension for the Pi coding agent + @llblab/pi-telegram bridge. Wraps the inbound voice/audio pipeline (downloads voice notes, runs STT via a peer-dep provider extension, sends a 🎙️ echo to the user, and feeds the transcript into the agent prompt). STT is delegated to a peer-dep provider extension (default: pi-openai-stt; the only one in the repo since v0.5.0) selected via extensions.pi-telegram-stt.stt_provider in telegram.json. The 🎙️ echo is one feature of this package, not its purpose — the package name is the scope (STT orchestration), not a single feature. v0.7.0: bundled _logger.ts (was shared at extensions/_logger.ts in the source repo; now per-package so this npm package is self-contained and installable via plain `npm install` from the registry).",
   "type": "module",
   "license": "MIT",
   "main": "./index.ts",
@@ -26,6 +26,17 @@
     "@earendil-works/pi-coding-agent": "*",
     "@llblab/pi-telegram": "*",
     "pi-openai-stt": "*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnlam1968/pi-voice-telegram.git",
+    "directory": "extensions/pi-telegram-stt"
+  },
+  "bugs": {
+    "url": "https://github.com/johnlam1968/pi-voice-telegram/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "pi": {
     "extensions": ["./index.ts"]
