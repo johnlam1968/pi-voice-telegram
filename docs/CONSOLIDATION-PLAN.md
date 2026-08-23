@@ -16,6 +16,17 @@
 > **Follows the AGENTS.md "every plan bullet → smoke stage or
 > explicit deferral" discipline.** Each phase below has its own
 > acceptance matrix.
+>
+> **Phase 1 execution note (2026-08-23)**: The `npm deprecate`
+> CLI auth paths are all blocked for the 3 deprecated packages.
+> OIDC trusted publishing only covers `npm publish` / `npm stage
+> publish`, not `npm deprecate` (npm limitation). The GAT secret
+> requires interactive 2FA for deprecate, and TOTP-via-CI attempts
+> were rejected. The deprecations are applied via the npm web UI's
+> "Deprecate package" button. **Documented gap**: the deprecation
+> message is npm's default ("Package no longer supported...") rather
+> than the custom messages from Appendix B. The precise text is less
+> important than the warning itself; the maintainer accepts this.
 
 ---
 

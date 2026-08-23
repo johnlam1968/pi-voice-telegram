@@ -272,25 +272,26 @@ What this means for the operator's running pi:
 This is a pure **deprecation** change. No code change for operators. No tag, no commit against the 4 active packages.
 
 What changed:
-- `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation message points operators at `pi-telegram-stt` and `pi-telegram-tts`.
-- The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml`. The job uses OIDC trusted publishing (the deprecated package has a trusted publisher configured on npmjs.com pointing at this workflow) and runs on `workflow_dispatch`. Subsequent runs are no-ops (idempotent message re-apply).
+- `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation warns new `npm install` users; existing installs continue to work.
+- The deprecation was applied via the **npm web UI's "Deprecate package" button** (https://www.npmjs.com/package/pi-voice-telegram/settings). The web UI uses the maintainer's browser session, which bypasses 2FA. **Documented gap**: the deprecation message is npm's generic default ("Package no longer supported. Contact Support at https://www.npmjs.com/support for more info.") rather than the custom message from `docs/CONSOLIDATION-PLAN.md` Appendix B. The maintainer accepts this as a documented gap; the precise text is less important than the warning itself.
+- **Why not the CLI?** The `npm deprecate` CLI auth paths are all blocked:
+  - OIDC trusted publishing only covers `npm publish` and `npm stage publish`, not `npm deprecate` (npm limitation; confirmed by the maintainer reading the npm trusted-publisher docs).
+  - The GAT secret (`NPM_TOKEN`) requires interactive 2FA for deprecate. TOTP-via-CI attempts via `NPM_CONFIG_OTP` and `--otp` were both rejected with EOTP ("typoed it, or it timed out"). The auth path is workable for `npm publish` because the publish step is in the same workflow and uses a different staging flow.
+  - Local `npm login` isn't set up on the host.
+- `.github/workflows/publish.yml` was modified to add (and then remove) a `deprecate` job. The final state has no deprecate job — the deprecation happens via the web UI, the workflow comment block at the bottom of the publish job explains why.
 - `AGENTS.md` — added this v0.21.0 changelog section.
 
-How the deprecate job is triggered (operator flow):
-```bash
-unset GITHUB_TOKEN
-gh workflow run publish.yml
-# Watch the run
-gh run watch
-```
-The job idempotently re-applies all 3 deprecation messages (pi-voice-telegram, pi-openai-stt, pi-voice-telegram-scripts). Each phase triggers this once; subsequent runs are no-ops.
+How the deprecate is triggered (operator flow, for the remaining 2 packages in Phases 2 + 3):
+1. Go to the package page on npmjs.com → Settings → "Deprecate package"
+2. Click the button (no custom message input in the web UI; npm applies its default)
+3. Verify with `npm view <pkg> deprecated` (returns the deprecation notice)
 
 What this means for the operator's running pi:
 - **No change needed.** The shim at `~/.pi/agent/extensions/pi-telegram-stt.ts` still works. The `telegram.json#outboundHandlers[0].template` still works. The 3 active sister extensions are unchanged.
 - **`npm install pi-voice-telegram@0.16.12` will now print a deprecation warning.** Existing installs continue to work — the deprecation is purely a heads-up for new installs.
 
 What comes next (the remaining 2 phases of the consolidation):
-- **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt`.
-- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts`.
+- **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt` (via web UI).
+- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts` (via web UI).
 
-See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B).
+See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).

@@ -202,47 +202,20 @@ jobs:
           # Future enhancement: include a list of the 3 published packages
           # with their install commands for end users.
 
-  deprecate:
-    # Deprecate the 3 superseded packages (the v0.8.0 / v0.2.0 consolidation).
-    # Idempotent: `npm deprecate <pkg> <msg>` overwrites any prior message.
-    # Uses OIDC trusted publishing (the deprecated packages have trusted
-    # publishers configured on npmjs.com pointing at this workflow). Runs
-    # on every workflow_dispatch so the maintainer can re-apply the
-    # deprecation messages at any time without a new tag.
-    # The deprecation messages are documented in
-    # docs/CONSOLIDATION-PLAN.md Appendix B.
-    name: Deprecate superseded packages
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write   # for OIDC trusted publishing on npm deprecate
-    # No `environment:` block — same gating as publish (none, by default).
-
-    steps:
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-          registry-url: 'https://registry.npmjs.org'
-          # OIDC trusted publishing: setup-node auto-issues a short-lived
-          # token from the OIDC exchange when registry-url is provided
-          # and id-token: write is granted. The token is auto-applied
-          # to npm commands via NODE_AUTH_TOKEN. We intentionally do NOT
-          # override it with the NPM_TOKEN secret (that GAT requires
-          # interactive 2FA for deprecate).
-
-      - name: Deprecate pi-voice-telegram (old monolithic, split in v0.19.0)
-        run: |
-          npm deprecate pi-voice-telegram@0.16.12 \
-            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory."
-
-      - name: Deprecate pi-openai-stt (subsumed into pi-telegram-stt@0.8.0+)
-        run: |
-          npm deprecate pi-openai-stt \
-            "Subsumed into pi-telegram-stt@0.8.0+. Install only pi-telegram-stt; the OpenAI-compatible STT provider is now bundled. Existing configs: move the \"pi-openai-stt\" extension block into \"pi-telegram-stt\"."
-
-      - name: Deprecate pi-voice-telegram-scripts (subsumed into pi-telegram-tts@0.2.0+)
-        run: |
-          npm deprecate pi-voice-telegram-scripts \
-            "Subsumed into pi-telegram-tts@0.2.0+. The TTS scripts are now bundled in the package; the \"tts-minimax\" and \"tts-openai\" bin names still work on PATH. Existing operators using outboundHandlers[0].template: update the absolute path to point at extensions/pi-telegram-tts/tts-minimax.mjs (or just use the bin name)."
+  # NOTE: there is intentionally NO automated `deprecate` job in this
+  # workflow. The v0.8.0 / v0.2.0 consolidation (3 packages deprecated:
+  # pi-voice-telegram@0.16.12, pi-openai-stt, pi-voice-telegram-scripts)
+  # is applied via the npm web UI's "Deprecate package" button. The CLI
+  # auth paths are all blocked:
+  #   - OIDC trusted publishing only covers `npm publish` and
+  #     `npm stage publish`, not `npm deprecate` (npm limitation).
+  #   - The GAT secret (NPM_TOKEN) requires interactive 2FA for
+  #     deprecate, which the TOTP-via-CI attempts rejected
+  #     (EOTP: "typoed it, or it timed out").
+  # The web UI uses the maintainer's browser session, which is
+  # already authenticated and bypasses 2FA. The deprecation message
+  # is npm's default ("Package no longer supported...") — the
+  # maintainer accepts this as a documented gap; the precise text
+  # is less important than the warning itself.
+  # See AGENTS.md "v0.21.0 changelog" and docs/CONSOLIDATION-PLAN.md
+  # for the design history.
