@@ -162,6 +162,44 @@ Follow `docs/CONSOLIDATION-PLAN.md` phase by phase:
   `npm view pi-openai-stt deprecated`,
   `npm view pi-voice-telegram-scripts deprecated`).
 
+- **Phase 6** (15 min): **dispatch a verifier agent** to
+  independently check the worker's output. Read
+  `docs/CONSOLIDATION-VERIFIER-BRIEFING.md` (the briefing for
+  the verifier). Use the `task` tool with `agent_name: "verifier"`
+  and a self-contained prompt that includes the plan path +
+  the verifier briefing path. The verifier returns a report
+  (PASS / FAIL / PARTIAL) at `/tmp/consolidation-verification-report.md`.
+  Read the report. If FAIL, dispatch a fix worker (scope =
+  the specific failed checks). If PARTIAL, decide with the user
+  whether to ship with documented gaps or fix first. If PASS,
+  report a clean completion to the user.
+
+## How to dispatch the verifier (Phase 6)
+
+The runtime supports a `verifier` built-in agent role. The
+dispatch shape is:
+
+```python
+task(
+    description="Verify consolidation plan execution",
+    prompt=(
+        "You are verifying the execution of the consolidation plan at "
+        "docs/CONSOLIDATION-PLAN.md in the repo at "
+        "/home/john/CodingProjects/pi-voice-telegram/. The full briefing "
+        "is at docs/CONSOLIDATION-VERIFIER-BRIEFING.md. Read both files "
+        "first, then verify each phase against its acceptance matrix. "
+        "Write your report to /tmp/consolidation-verification-report.md "
+        "and print a short summary to stdout. Do NOT edit any files; "
+        "do NOT mutate npm or git. Read-only verification only."
+    ),
+    agent_name="verifier",
+)
+```
+
+The verifier's report is the gate for the session's final
+report. Don't declare done until the verifier says PASS or
+PARTIAL-with-acknowledged-gaps.
+
 ## Acceptance criteria (per phase)
 
 The plan has its own acceptance matrices in
