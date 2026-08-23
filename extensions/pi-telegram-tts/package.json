@@ -1,6 +1,6 @@
 {
 	"name": "pi-telegram-tts",
-	"version": "0.1.0",
+	"version": "0.1.1",
 	"description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. Registers a synthesis provider against the bridge's public voice API so voice.sendTranscript and getVoicePromptContribution both work (the v0.19.0 outboundHandlers[0].template path silently drops the transcript). Spawns the same tts-{minimax,openai}.mjs scripts the operator's template already uses — no new HTTP client, no native deps, no new abstraction layer. v0.1.0 ships the provider only; section UI (v0.2.0), per-provider config schema (v0.3.0), and UI-driven config (v0.4.0) are deferred.",
 	"type": "module",
 	"license": "MIT",

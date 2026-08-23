@@ -1,6 +1,6 @@
 {
   "name": "pi-openai-stt",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "STT provider for any OpenAI-compatible API gateway. The only STT provider in the repo since v0.5.0. Implements the SttProvider contract from pi-telegram-stt; registers with id 'pi-openai-stt'. Talks POST /v1/audio/transcriptions. Config (first non-empty list wins): explicit OpenAiSttArgs.baseUrl (string or string[]) > extensions['pi-openai-stt'].base_url/.api_key in telegram.json (string or string[] for a fallback chain) > OPENAI_STT_BASE_URL/OPENAI_API_KEY env vars > ~/.pi/agent/auth.json (api_key only) > smart default (OpenAI's API if a key is resolvable, else the local fw-openai-sts shim at http://127.0.0.1:8081/v1). The fallback chain tries each URL in order and returns the first non-empty transcript; empty results and errors both fall through. Also: OPENAI_STT_MODEL (default whisper-1), PI_TELEGRAM_LANG (default yue). v0.3.0: bundled _logger.ts (was shared at extensions/_logger.ts in the source repo; now per-package so this npm package is self-contained and installable via plain `npm install` from the registry).",
   "type": "module",
   "license": "MIT",
