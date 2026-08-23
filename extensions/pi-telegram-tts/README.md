@@ -4,8 +4,14 @@ Voice **synthesis** provider for the Pi coding agent +
 [@llblab/pi-telegram](https://github.com/llblab/pi-telegram) bridge. Closes
 the `voice.sendTranscript: true` gap (which is a silent no-op for the
 `outboundHandlers` template path) and unlocks `getVoicePromptContribution`
-for voice-tagged turns. Reuses the existing `tts-minimax.mjs` /
-`tts-openai.mjs` scripts — no new HTTP client, no native deps.
+for voice-tagged turns.
+
+**As of v0.2.0, the `tts-minimax.mjs` and `tts-openai.mjs` scripts are
+bundled inside this package** (previously a separate
+`pi-voice-telegram-scripts` npm package, now deprecated). The package's
+`bin` field exposes both scripts on PATH after `npm install`. Same
+scripts, same auth resolution, same ffmpeg output; the only delta vs
+the v0.1.0 provider is the bundled scripts.
 
 **STT is delegated to [`pi-telegram-stt`](../pi-telegram-stt/README.md)**
 and its provider extensions. This package only does TTS.
@@ -18,6 +24,16 @@ From npm (once published):
 pi install npm:pi-telegram-tts
 ```
 
+The bundled scripts are exposed on PATH after install:
+- `tts-minimax` — MiniMax T2A HTTP client (CLI)
+- `tts-openai` — OpenAI `/v1/audio/speech` client (CLI)
+
+Test with:
+```bash
+tts-minimax --help
+tts-openai --help
+```
+
 On-host dev loader (one-liner re-export shim), assuming the operator
 runs from the source repo:
 
@@ -27,24 +43,10 @@ export { default } from "/path/to/this/repo/extensions/pi-telegram-tts/index.ts"
 EOF
 ```
 
-Also install the scripts package (peer dep — the runtime scripts the
-provider spawns):
-
-```bash
-pi install npm:pi-voice-telegram-scripts
-```
-
-Or via the dev loader:
-
-```bash
-cat > ~/.pi/agent/extensions/pi-voice-telegram-scripts.ts <<'EOF'
-export * from "/path/to/this/repo/extensions/pi-voice-telegram-scripts/index.ts";
-EOF
-```
-
-The `pi-voice-telegram-scripts` package exposes the `tts-minimax` and
-`tts-openai` binaries on PATH; the `pi-telegram-tts` provider spawns
-them by name when npm-installed, or by absolute path when dev-loaded.
+The bundled scripts are at `extensions/pi-telegram-tts/tts-{minimax,openai}.mjs`
+in the source repo. The `synth.ts` `resolveScriptPath` finds them in the
+same dir (dev) or on PATH (npm install) — no separate peer-dep package
+needed.
 
 ## Configure (v0.1.0)
 
@@ -71,10 +73,51 @@ Edit `~/.pi/agent/telegram.json`:
 | `provider` | `"minimax"` \| `"openai"` | required for the provider to fire |
 | `voice` | string | passed as `--voice` to the TTS script |
 | `model` | string | passed as `--model` to the TTS script |
-| `disabled` | boolean | (v0.2.0) set by the section UI toggle |
+| `disabled` | boolean | (v0.3.0) set by the section UI toggle |
 
 Live edits take effect on the next voice-tagged turn (the provider
 re-reads config on every call).
+
+## Migration from 0.1.2
+
+The v0.2.0 release moves the `tts-*.mjs` scripts from the separate
+`pi-voice-telegram-scripts` npm package into `pi-telegram-tts`. The
+scripts are unchanged (same CLI args, same auth, same ffmpeg output);
+the only delta is the dispatch (now bundled, no separate package
+install).
+
+If you have an existing `outboundHandlers[0].template` pointing at the
+old `pi-voice-telegram-scripts` package, update the path:
+
+```diff
+ "outboundHandlers": [
+   {
+     "type": "voice",
+     "template": [
+-      "/path/to/extensions/pi-voice-telegram-scripts/tts-minimax.mjs --out {mp3} ..."
++      "/path/to/extensions/pi-telegram-tts/tts-minimax.mjs --out {mp3} ..."
+       "ffmpeg -y -i {mp3} ..."
+     ]
+   }
+ ]
+```
+
+Or, since `pi-telegram-tts@0.2.0` exposes the bins:
+
+```diff
+ "template": [
+-  "/path/to/extensions/pi-voice-telegram-scripts/tts-minimax.mjs --out {mp3} ..."
++  "tts-minimax --out {mp3} ..."   # the bin field exposes this on PATH
+   "ffmpeg -y -i {mp3} ..."
+ ]
+```
+
+(Both paths work; the absolute path is a 1-line change for the v0.19.0
+default path, the bin name is the npm-install idiom.)
+
+The `pi-voice-telegram-scripts` npm package is deprecated — `npm install
+pi-voice-telegram-scripts` will print a deprecation warning. The new
+install path is just `npm install pi-telegram-tts@latest`.
 
 ## Migration from the existing template
 
@@ -130,7 +173,7 @@ to fire, you must replace (option 1).
   `pi-telegram-tts/synth`. Visible in the bridge's `telegram-status`
   if a voice message fires while mis-configured.
 - **Smoke test** — `bash scripts/pi-telegram-tts-smoke-test.sh`
-  (from the repo root) replays all 6 v0.1.0 acceptance stages in
+  (from the repo root) replays all 14 v0.2.0 acceptance stages in
   ~5s without needing the agent, the bridge, or Telegram. Use
   `--no-network` to skip the live TTS round-trip in CI / offline.
   See `scripts/pi-telegram-tts-smoke-test.sh` for the full
