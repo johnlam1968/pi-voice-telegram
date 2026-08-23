@@ -79,7 +79,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish 3 sister packages
+    name: Publish 4 sister packages
     runs-on: ubuntu-latest
     # No `environment:` block by default — tag pushes publish
     # immediately. For an extra gate, set up a GitHub Environment
@@ -99,15 +99,15 @@ jobs:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Print current versions of the 3 packages
+      - name: Print current versions of the 4 packages
         run: |
-          # The 3 packages are published at their current versions
+          # The 4 packages are published at their current versions
           # — they're independent packages with independent semver.
           # The tag (if any) is just a release marker, not a
           # version enforcer. This is intentional: the new design
-          # is one repo, 3 packages, each at its own version.
-          echo "Publishing the 3 sister packages at their current versions:"
-          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt; do
+          # is one repo, 4 packages, each at its own version.
+          echo "Publishing the 4 sister packages at their current versions:"
+          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt pi-telegram-tts; do
             ver=$(node -p "require('./extensions/${pkg}/package.json').version")
             echo "  ${pkg}@${ver}"
           done
@@ -115,7 +115,7 @@ jobs:
       - name: Validate every package.json has a valid semver version
         run: |
           failed=0
-          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt; do
+          for pkg in pi-voice-telegram-scripts pi-openai-stt pi-telegram-stt pi-telegram-tts; do
             ver=$(node -p "require('./extensions/${pkg}/package.json').version")
             if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
               echo "::error::${pkg} has invalid version: ${ver}"
@@ -149,6 +149,13 @@ jobs:
       - name: Publish pi-telegram-stt (anchor)
         run: |
           cd extensions/pi-telegram-stt
+          npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish pi-telegram-tts (TTS synthesis provider, v0.1.0+)
+        run: |
+          cd extensions/pi-telegram-tts
           npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
