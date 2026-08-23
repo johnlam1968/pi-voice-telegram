@@ -272,8 +272,20 @@ What this means for the operator's running pi:
 This is a pure **deprecation** change. No code change for operators. No tag, no commit against the 4 active packages.
 
 What changed:
-- `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation message points operators at `pi-telegram-stt` and `pi-telegram-tts`. The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml` (idempotent OIDC re-apply on every tag push, and on `workflow_dispatch` for the Phase 1 manual trigger).
+- `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation message points operators at `pi-telegram-stt` and `pi-telegram-tts`.
+- The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml`. The job runs only on `workflow_dispatch` (with an optional `deprecate_otp` input for the GAT path) — NOT on tag pushes, because the deprecated packages have no OIDC trusted publisher configured (and adding one to a deprecated package on npmjs.com is a chicken-and-egg).
 - `AGENTS.md` — added this v0.21.0 changelog section.
+
+How the deprecate job is triggered (operator flow):
+```bash
+# 1. Get a 6-digit TOTP code from your authenticator app
+# 2. Trigger the workflow with the OTP
+unset GITHUB_TOKEN
+gh workflow run publish.yml -f deprecate_otp=<6-digit-code>
+# 3. Watch the run
+gh run watch
+```
+The job idempotently re-applies all 3 deprecation messages (pi-voice-telegram, pi-openai-stt, pi-voice-telegram-scripts). Each phase triggers this once; subsequent runs are no-ops.
 
 What this means for the operator's running pi:
 - **No change needed.** The shim at `~/.pi/agent/extensions/pi-telegram-stt.ts` still works. The `telegram.json#outboundHandlers[0].template` still works. The 3 active sister extensions are unchanged.
