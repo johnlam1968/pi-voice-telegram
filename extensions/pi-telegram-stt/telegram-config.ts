@@ -3,16 +3,19 @@
  *
  * Persistence: `telegram.json` under `extensions["pi-telegram-stt"]`.
  *
- * Schema-light: the operator-facing knobs are `showTranscript` and
- * `stt_provider`. The STT provider is looked up in the in-process
- * registry (see `./stt-provider.ts`) at STT call time — the
- * `pi-openai-stt` provider extension registers itself at module
- * load. `pi-openai-stt` talks to any OpenAI-compatible API gateway
- * (OpenAI's actual API, the local `fw-openai-sts` shim, faster-
- * whisper-server, etc.) and supports a fallback chain in
- * `extensions["pi-openai-stt"].base_url`. `pi-whisper-stt` was
- * retired in v0.5.0; `pi-openai-stt` covers every backend it ever
- * talked to.
+ * ## v0.8.0 — flat config: `pi-openai-stt` subsumed
+ *
+ * The OpenAI-compatible STT provider (`openai-stt.ts`) was
+ * subsumed from the separate `pi-openai-stt` npm package into
+ * this package. The provider's `base_url` and `apiKey` config
+ * fields moved from a separate `extensions["pi-openai-stt"]`
+ * block to top-level keys under `extensions["pi-telegram-stt"]`.
+ * The migration is a 5-line edit in `telegram.json` — see
+ * `README.md`'s "Migration from 0.7.2" section.
+ *
+ * The `SttProvider` interface stays as an in-package seam
+ * (`./stt-provider.ts`) for future backends. The `stt_provider`
+ * config field stays too (default: `"pi-openai-stt"`).
  *
  * ## v0.7.2 — `echoEnabled` → `showTranscript` rename
  *
@@ -40,9 +43,16 @@ export interface EchoConfig {
 	 *  returned to the bridge (so the LLM always gets text);
 	 *  this only gates the user-facing reply. */
 	showTranscript: boolean;
-	/** The id of the STT provider to use. The provider must be
-	 *  installed and registered (default: `"pi-openai-stt"`). */
+	/** The id of the STT provider to use. The default
+	 *  `"pi-openai-stt"` is bundled inside this package as of
+	 *  v0.8.0. The seam stays for future backends. */
 	stt_provider: string;
+	/** v0.8.0: OpenAI-compatible STT provider's `base_url`.
+	 *  Either a single URL string or a fallback chain (string[]).
+	 *  Empty/undefined = use the env / auth.json / smart default. */
+	base_url?: string | string[];
+	/** v0.8.0: OpenAI-compatible STT provider's API key. */
+	apiKey?: string;
 }
 
 export const DEFAULTS: EchoConfig = {
@@ -72,28 +82,92 @@ function readShowTranscriptFlag(
 	return undefined;
 }
 
+/** Read the OpenAI STT config (`base_url` + `apiKey`) from the
+ *  `extensions["pi-telegram-stt"]` block. The `base_url` may be a
+ *  single URL (string) or a fallback chain (string[]). Returns
+ *  an empty object when the block is absent or the keys are
+ *  unset / wrong type. Used by the in-package `openai-stt.ts`
+ *  client (which was previously in a separate `pi-openai-stt`
+ *  package before v0.8.0).
+ *
+ *  Backward-compat: if the operator's old `extensions["pi-openai-stt"]`
+ *  block is still present, also read from there (read-only; not
+ *  written by `saveEchoConfig`). The old block is from a separate
+ *  npm package that is now deprecated. */
+function readOpenAiSttConfig(
+	block: Record<string, unknown> | undefined,
+): { baseUrl?: string | string[]; apiKey?: string } {
+	if (!block) return {};
+	let baseUrl: string | string[] | undefined;
+	if (typeof block.base_url === "string" && block.base_url) {
+		baseUrl = block.base_url;
+	} else if (
+		Array.isArray(block.base_url) &&
+		block.base_url.every((v) => typeof v === "string" && v)
+	) {
+		baseUrl = block.base_url as string[];
+	}
+	return {
+		baseUrl,
+		apiKey:
+			typeof block.apiKey === "string" && block.apiKey
+				? block.apiKey
+				: undefined,
+	};
+}
+
 export function loadEchoConfig(): EchoConfig {
 	const path = configPath();
-	if (!existsSync(path)) return structuredClone(DEFAULTS);
+	const base: EchoConfig = structuredClone(DEFAULTS);
+	if (!existsSync(path)) return base;
 	try {
 		const raw = readFileSync(path, "utf8");
 		const parsed = JSON.parse(raw) as {
 			extensions?: Record<string, unknown>;
 		};
 		const block = (parsed.extensions ?? {})[KEY] as
-			| Partial<EchoConfig> & { echoEnabled?: unknown }
+			| (Partial<EchoConfig> & { echoEnabled?: unknown })
 			| undefined;
-		if (!block) return structuredClone(DEFAULTS);
-		return {
-			showTranscript:
-				readShowTranscriptFlag(block) ?? DEFAULTS.showTranscript,
-			stt_provider:
+		if (block) {
+			base.showTranscript =
+				readShowTranscriptFlag(block) ?? DEFAULTS.showTranscript;
+			base.stt_provider =
 				typeof block.stt_provider === "string" && block.stt_provider
 					? block.stt_provider
-					: DEFAULTS.stt_provider,
-		};
+					: DEFAULTS.stt_provider;
+			const stt = readOpenAiSttConfig(block);
+			base.base_url = stt.baseUrl;
+			base.apiKey = stt.apiKey;
+		}
+		// Backward-compat: also read from the legacy
+		// `extensions["pi-openai-stt"]` block if it has values
+		// that the new flat block doesn't.
+		const legacyBlock = (parsed.extensions ?? {})["pi-openai-stt"] as
+			| { base_url?: unknown; api_key?: unknown }
+			| undefined;
+		if (legacyBlock && (!base.base_url || !base.apiKey)) {
+			if (!base.base_url) {
+				if (typeof legacyBlock.base_url === "string" && legacyBlock.base_url) {
+					base.base_url = legacyBlock.base_url;
+				} else if (
+					Array.isArray(legacyBlock.base_url) &&
+					legacyBlock.base_url.every((v) => typeof v === "string" && v)
+				) {
+					base.base_url = legacyBlock.base_url as string[];
+				}
+			}
+			if (!base.apiKey) {
+				if (
+					typeof legacyBlock.api_key === "string" &&
+					legacyBlock.api_key
+				) {
+					base.apiKey = legacyBlock.api_key;
+				}
+			}
+		}
+		return base;
 	} catch {
-		return structuredClone(DEFAULTS);
+		return base;
 	}
 }
 
@@ -111,10 +185,13 @@ export function saveEchoConfig(cfg: EchoConfig): void {
 		}
 	}
 	const extensions = (parsed.extensions ?? {}) as Record<string, unknown>;
-	extensions[KEY] = {
+	const out: Record<string, unknown> = {
 		showTranscript: cfg.showTranscript,
 		stt_provider: cfg.stt_provider,
 	};
+	if (cfg.base_url !== undefined) out.base_url = cfg.base_url;
+	if (cfg.apiKey !== undefined) out.apiKey = cfg.apiKey;
+	extensions[KEY] = out;
 	parsed.extensions = extensions;
 	// Atomic write: temp + rename.
 	const tempPath = path + ".tmp";

@@ -4,10 +4,9 @@ Repo for the Telegram voice/text companion to the [Pi coding agent](https://gith
 
 **This repo has no "main" package.** The runtime surface is:
 
-1. **Three sister extensions** under `extensions/`:
-   - **`pi-telegram-stt`** (was `pi-telegram-echo` before v0.18.1) — STT orchestrator: registers the voice transcription provider, looks up the configured STT provider in the in-process registry, sends the 🎙️ echo to the user, feeds the transcript into the agent prompt.
-   - **`pi-openai-stt`** — STT provider that talks to any OpenAI-compatible API gateway (the on-host CUDA `whisper-server` via the `fw-openai-sts` shim, OpenAI's actual API, `faster-whisper-server`, etc.).
-   - **`pi-telegram-tts`** (v0.1.0, shipped 2026-08-23) — TTS synthesis provider: closes the `voice.sendTranscript: true` gap by registering a synthesis provider against the bridge's public voice API. Spawns the same `tts-*.mjs` scripts and reuses the same `ffmpeg` wrap; the only delta is the dispatch path (synthesis provider instead of `outboundHandlers[0].template`). Section UI, per-provider config schema, and UI-driven config are deferred to v0.2.0 → v0.4.0.
+1. **Two sister extensions** under `extensions/`:
+   - **`pi-telegram-stt`** (was `pi-telegram-echo` before v0.18.1) — STT orchestrator: registers the voice transcription provider, looks up the configured STT provider in the in-process registry, sends the 🎙️ echo to the user, feeds the transcript into the agent prompt. **As of v0.8.0, the OpenAI-compatible STT provider is bundled inside this package** (previously a separate `pi-openai-stt` npm package, now deprecated). The `SttProvider` interface stays as a private in-package seam for future backends.
+   - **`pi-telegram-tts`** (v0.1.0, shipped 2026-08-23; v0.2.0 subsumes the runtime scripts) — TTS synthesis provider: closes the `voice.sendTranscript: true` gap by registering a synthesis provider against the bridge's public voice API. Spawns the same `tts-*.mjs` scripts and reuses the same `ffmpeg` wrap; the only delta is the dispatch path (synthesis provider instead of `outboundHandlers[0].template`). Section UI, per-provider config schema, and UI-driven config are deferred to v0.3.0 → v0.5.0.
 2. **Runtime scripts** under `extensions/pi-voice-telegram-scripts/`:
    - **`tts-minimax.mjs`** — MiniMax T2A HTTP client (CLI).
    - **`tts-openai.mjs`** — OpenAI `/v1/audio/speech` client (CLI).
@@ -33,7 +32,7 @@ The host agent also needs `ffmpeg` on `PATH` (libopus encode) and a reachable `w
 
 **Clean install** (recommended for a fresh host agent):
 1. `git clone https://github.com/johnlam1968/pi-voice-telegram.git` into the location the host agent's `pi -e` shims already point to (or wherever the operator wants the source to live).
-2. The three sister extensions are loaded by the bridge via dev shims at `~/.pi/agent/extensions/{pi-telegram-stt,pi-openai-stt,pi-telegram-tts}.ts` — these re-export from the local source. The shims are not part of this repo; they live in the operator's `~/.pi/agent/extensions/` directory and look like:
+2. The two sister extensions are loaded by the bridge via dev shims at `~/.pi/agent/extensions/{pi-telegram-stt,pi-telegram-tts}.ts` — these re-export from the local source. The shims are not part of this repo; they live in the operator's `~/.pi/agent/extensions/` directory and look like:
    ```ts
    // ~/.pi/agent/extensions/pi-telegram-tts.ts
    export { default } from "/home/john/CodingProjects/pi-voice-telegram/extensions/pi-telegram-tts/index.ts";
@@ -53,29 +52,29 @@ The host agent also needs `ffmpeg` on `PATH` (libopus encode) and a reachable `w
 
    When `pi-telegram-tts` is installed AND the operator clears `outboundHandlers[0]`, the provider becomes the sole TTS path. Same `tts-*.mjs` scripts, different dispatch.
 
-**Peer deps**: each sister extension declares its peer deps in its own `package.json` (`@earendil-works/pi-coding-agent`, `@llblab/pi-telegram`, plus the cross-extension peers — `pi-telegram-stt` ↔ `pi-openai-stt`, and `pi-telegram-tts` → `pi-voice-telegram-scripts`). The host agent resolves them from its own `node_modules/`. This repo's own `node_modules/` is only for editor IntelliSense (e.g. `jiti` types) and for the smoke test scripts.
+**Peer deps**: each sister extension declares its peer deps in its own `package.json` (`@earendil-works/pi-coding-agent`, `@llblab/pi-telegram`; the cross-extension peer `pi-telegram-stt` ↔ `pi-openai-stt` was removed in v0.8.0 when `pi-openai-stt` was subsumed, and `pi-telegram-tts` → `pi-voice-telegram-scripts` was removed in v0.2.0 when the scripts were merged). The host agent resolves them from its own `node_modules/`. This repo's own `node_modules/` is only for editor IntelliSense (e.g. `jiti` types) and for the smoke test scripts.
 
 ## Branch workflow
 
-- **`master`** — the current stable release. Three sister extensions + runtime scripts + docs. The operator's running `pi` should pin to this.
-- **`dev/pi-telegram-stt`** — future work: the LLM tool surface (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_*` config tools), the voice-catalog tool, the `pi-voice-telegram-settings` extension (UI section for editing `telegram.json` on the fly), and the v0.2.0 → v0.4.0 `pi-telegram-tts` work (section UI + per-provider config schema + UI-driven config). The LLM tools + companion-config schema are on this branch — they don't belong on master (per the v0.19.0 split).
+- **`master`** — the current stable release. Two sister extensions + runtime scripts + docs. The operator's running `pi` should pin to this.
+- **`dev/pi-telegram-stt`** — future work: the LLM tool surface (`synthesize_voice`, `transcribe_audio`, `pi_voice_telegram_*` config tools), the voice-catalog tool, the `pi-voice-telegram-settings` extension (UI section for editing `telegram.json` on the fly), and the v0.3.0 → v0.5.0 `pi-telegram-tts` work (section UI + per-provider config schema + UI-driven config). The LLM tools + companion-config schema are on this branch — they don't belong on master (per the v0.19.0 split).
 
 When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegram-stt` continue to diverge. Merge back to master only after the extension work is verified end-to-end.
 
 ## Project layout
 
-- `extensions/pi-telegram-stt/` — sister extension: inbound STT + 🎙️ echo (renamed from `pi-telegram-echo` in v0.18.1). v0.7.0. Self-contained (bundles its own `_logger.ts` since v0.7.0). Publishable as `pi-telegram-stt` to the npm registry.
-- `extensions/pi-openai-stt/` — sister extension: STT provider that talks to any OpenAI-compatible API gateway. v0.3.0. Self-contained (bundles its own `_logger.ts` since v0.3.0). Publishable as `pi-openai-stt` to the npm registry.
-- `extensions/pi-telegram-tts/` — sister extension: TTS synthesis provider (v0.1.0, shipped 2026-08-23). Closes the `voice.sendTranscript: true` gap by registering against `registerTelegramVoiceSynthesisProvider`. Self-contained (bundles its own `_logger.ts`). Publishable as `pi-telegram-tts` to the npm registry. See `docs/PI-TELEGRAM-TTS-PLAN.md` for the v0.2.0 → v0.4.0 roadmap (section UI + per-provider config schema + UI-driven config).
-- `extensions/pi-voice-telegram-scripts/` — runtime shell scripts (v0.1.0). Publishable as `pi-voice-telegram-scripts` to the npm registry; the `bin` field makes them available as `tts-minimax`, `tts-openai`, and `fw-openai-sts` after `npm install`:
+- `extensions/pi-telegram-stt/` — sister extension: inbound STT + 🎙️ echo (renamed from `pi-telegram-echo` in v0.18.1). v0.8.0 — bundles the OpenAI-compatible STT provider (previously a separate `pi-openai-stt` package). Self-contained (bundles its own `_logger.ts` since v0.7.0). Publishable as `pi-telegram-stt` to the npm registry.
+- `extensions/pi-telegram-tts/` — sister extension: TTS synthesis provider (v0.2.0; v0.1.0 shipped 2026-08-23, v0.2.0 subsumes the runtime scripts). Closes the `voice.sendTranscript: true` gap by registering against `registerTelegramVoiceSynthesisProvider`. Self-contained (bundles its own `_logger.ts`). Publishable as `pi-telegram-tts` to the npm registry. See `docs/PI-TELEGRAM-TTS-PLAN.md` for the v0.3.0 → v0.5.0 roadmap (section UI + per-provider config schema + UI-driven config).
+- `extensions/pi-voice-telegram-scripts/` — runtime shell scripts (DEPRECATED in v0.2.0; the scripts were merged into `pi-telegram-tts`). Will be deleted in Phase 3. The `bin` field made them available as `tts-minimax`, `tts-openai`, and `fw-openai-sts` after `npm install`:
   - `tts-minimax.mjs` — MiniMax T2A CLI
   - `tts-openai.mjs` — OpenAI `/v1/audio/speech` CLI
   - `fw-openai-sts.ts` — host-side OpenAI-compatible shim for the local `whisper-server` (the `bin/fw-openai-sts` bash wrapper invokes `node --experimental-strip-types` on the .ts source)
 - `scripts/publish.sh` — local CLI publish for the 4 sister packages. The **preferred path is GitHub Actions** (`.github/workflows/publish.yml`, triggered by a `v*` tag push, using OIDC Trusted Publishing — no 2FA prompt, no stored secret). `publish.sh` is kept for `--dry-run` verification and emergency local publishes. See `docs/PUBLISHING.md` for the full setup walkthrough.
 - `.github/workflows/publish.yml` — the canonical release path. Tag-based trigger, OIDC provenance, dependency-ordered publish, GitHub Release creation.
 - `docs/PUBLISHING.md` — full setup walkthrough: OIDC trusted-publisher configuration, first-publish bootstrap (chicken-and-egg), 2FA OTP fallback, references to npm's deprecation timeline.
-- `scripts/mmx-tts-smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip).
-- `scripts/pi-telegram-tts-smoke-test.sh` — 6-stage v0.1.0 acceptance test for the `pi-telegram-tts` sister extension (jiti load + idempotency + 3 fall-through paths + optional live TTS round-trip; `--no-network` skips the network stage for CI).
+- `scripts/mmx-tts-smoke-test.sh` — 3-stage pipeline verification in ~5s (TTS → OGG/Opus → STT round-trip). Pre-existing broken path: references `scripts/tts-minimax.mjs` (v0.19.0 moved the scripts to `extensions/pi-voice-telegram-scripts/`). Tracked for the next session.
+- `scripts/pi-telegram-stt-smoke-test.sh` — 6-stage v0.8.0 acceptance test for the `pi-telegram-stt` sister extension (jiti load + idempotency + unconfigured fall-through + config merge + invalid base_url + optional live STT round-trip; `--no-network` skips the network stage for CI).
+- `scripts/pi-telegram-tts-smoke-test.sh` — 13-stage v0.1.0/v0.2.0 acceptance test for the `pi-telegram-tts` sister extension (jiti load + idempotency + 3 fall-through paths + optional live TTS round-trip; `--no-network` skips the network stage for CI).
 - `scripts/dev-status.sh`, `scripts/dev-watch.sh` — daily debug kit.
 - `docs/DEBUGGING.md` — log surface map + `dev-status.sh` / `dev-watch.sh` usage.
 - `docs/DESIGN-INTENT.md` — the "we said no to X because Y" record.
@@ -85,32 +84,30 @@ When a release is cut on master, tag it (e.g. `v0.19.0`) and let `dev/pi-telegra
 - `docs/PI-TELEGRAM-TTS-DESIGN.md` — companion to the plan: design rationale, the 4 patterns to copy from `pi-telegram-extension-demo`, the 3 things the demo doesn't show, the v0.1.0 implementation sketch, the migration story, the gotchas. Read this when starting v0.1.0.
 - `archive/` — investigation findings, superseded test scripts, design history, and bug filings. See `archive/README.md` for the full index.
 
-## Publishing the 4 sister packages to npm
+## Publishing the 2 active sister packages to npm
 
-The cluster image (`pi-sandbox`) installs the 4 sister packages at `@latest` from the npm registry — every rebuild picks up the newest published version.
+The cluster image (`pi-sandbox`) installs the 2 active sister packages at `@latest` from the npm registry — every rebuild picks up the newest published version.
 
 **Preferred path: GitHub Actions with OIDC Trusted Publishing** (no 2FA prompt, no stored secret):
 
 ```bash
-# 1. Bump the version in each package (leaves first)
-cd extensions/pi-voice-telegram-scripts && npm version patch
-cd ../pi-openai-stt && npm version patch
-cd ../pi-telegram-stt && npm version patch
+# 1. Bump the version in each package
+cd extensions/pi-telegram-stt && npm version patch
 cd ../pi-telegram-tts && npm version patch
 cd ../..
 
 # 2. Commit + tag + push (the tag triggers the workflow)
 git add -A
-git commit -m "chore(release): v0.7.1"
-git tag v0.7.1
+git commit -m "chore(release): v0.8.0"
+git tag v0.8.0
 git push --follow-tags
 
 # 3. Watch the workflow run
 #    https://github.com/<owner>/<repo>/actions/workflows/publish.yml
-#    On success, all 4 packages are on npm and a GitHub Release is created.
+#    On success, all 2 packages are on npm and a GitHub Release is created.
 ```
 
-The workflow (`.github/workflows/publish.yml`) verifies the version match across all 4 packages, publishes them in dependency order (leaves first), and creates a GitHub Release. OIDC provenance is enabled.
+The workflow (`.github/workflows/publish.yml`) verifies the version match across all 2 packages, publishes them, and creates a GitHub Release. OIDC provenance is enabled. The 3 deprecated packages (`pi-voice-telegram`, `pi-openai-stt`, `pi-voice-telegram-scripts`) are de-deprecated via the npm web UI, not via the workflow (the OIDC trusted publisher doesn't cover `npm deprecate`; see "v0.21.0 changelog" below).
 
 **Fallback path: local CLI** (`scripts/publish.sh`) — for the very first publish (chicken-and-egg with trusted publishing) and for emergencies. Uses `--otp <code>` or `NPM_CONFIG_OTP=<code>` for 2FA.
 
@@ -141,18 +138,16 @@ The `pi-telegram-tts-smoke-test.sh` invocation also serves as the unit-test patt
 The controlled tests exercise the in-process provider; live tests exercise the full stack. **Live testing is the only way to validate the bridge's voice-delivery pipeline end-to-end.**
 
 Pre-flight (one-time):
-1. Install all three sister extensions:
+1. Install both sister extensions:
    ```bash
    cat > ~/.pi/agent/extensions/pi-telegram-stt.ts <<'EOF'
    export { default } from "/home/john/CodingProjects/pi-voice-telegram/extensions/pi-telegram-stt/index.ts";
-   EOF
-   cat > ~/.pi/agent/extensions/pi-openai-stt.ts <<'EOF'
-   export { default } from "/home/john/CodingProjects/pi-voice-telegram/extensions/pi-openai-stt/index.ts";
    EOF
    cat > ~/.pi/agent/extensions/pi-telegram-tts.ts <<'EOF'
    export { default } from "/home/john/CodingProjects/pi-voice-telegram/extensions/pi-telegram-tts/index.ts";
    EOF
    ```
+   The OpenAI STT provider is bundled inside `pi-telegram-stt` as of v0.8.0 — no separate shim install needed.
 2. Configure `~/.pi/agent/telegram.json` (one of three modes — see the `pi-telegram-tts` README for the full matrix):
    - **Provider as sole TTS path** (recommended; required for `sendTranscript: true` to work): clear `outboundHandlers[0]`, set `extensions["pi-telegram-tts"]`.
    - **Template as primary, provider as fallback**: leave `outboundHandlers[0]` in place. The template fires first; the provider only runs if the template fails. `sendTranscript: true` is a no-op for the template path.
@@ -291,7 +286,34 @@ What this means for the operator's running pi:
 - **`npm install pi-voice-telegram@0.16.12` will now print a deprecation warning.** Existing installs continue to work — the deprecation is purely a heads-up for new installs.
 
 What comes next (the remaining 2 phases of the consolidation):
-- **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt` (via web UI).
+- **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt` (via web UI). ✅ SHIPPED 2026-08-23 (this session). See "v0.22.0 changelog" below.
+- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts` (via web UI).
+
+See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).
+
+## v0.22.0 changelog (the consolidation, phase 2: subsume `pi-openai-stt`)
+
+**SHIPPED 2026-08-23.** This is the bigger of the 3 consolidation phases. The OpenAI-compatible STT provider (the in-process client + the registry registration) is now bundled inside `pi-telegram-stt@0.8.0`. The separate `pi-openai-stt` npm package is deprecated.
+
+What changed in the repo:
+- `extensions/pi-openai-stt/` — **DELETED** (`git rm -r`). The 5 files (`index.ts`, `_logger.ts`, `openai-stt.ts`, `package.json`, `README.md`) were subsumed into `extensions/pi-telegram-stt/`.
+- `extensions/pi-telegram-stt/openai-stt.ts` — **NEW** (moved from `pi-openai-stt/openai-stt.ts` with relative imports updated). The in-process OpenAI-compatible STT client; no behavior change.
+- `extensions/pi-telegram-stt/stt-provider.ts` — unchanged; the in-package `SttProvider` interface and registry stay as the private in-package seam for future backends.
+- `extensions/pi-telegram-stt/telegram-config.ts` — `EchoConfig` gains `base_url?: string | string[]` and `apiKey?: string` (v0.8.0 flat shape). The reader still accepts the legacy `extensions["pi-openai-stt"].base_url` / `.api_key` block for backward compatibility (read-only fallback). `saveEchoConfig` only writes the new flat shape.
+- `extensions/pi-telegram-stt/index.ts` — registers the OpenAI provider at module load (top-level side effect, same load-order-race fix from v0.3.1). The provider id is `"pi-openai-stt"` (same as the deprecated external package, so existing `stt_provider: "pi-openai-stt"` configs keep working). Session lifecycle: re-register on `session_start` (defensive), unregister on `session_shutdown`.
+- `extensions/pi-telegram-stt/package.json` — bumped `0.7.2 → 0.8.0`; removed `"pi-openai-stt"` from `peerDependencies`; description updated to mention the bundled provider.
+- `extensions/pi-telegram-stt/README.md` — rewritten to document the new flat config shape (`base_url` / `apiKey` directly under `extensions["pi-telegram-stt"]`); added a "Migration from 0.7.2" section showing the old vs new `telegram.json` block.
+- `scripts/pi-telegram-stt-smoke-test.sh` — **NEW**. 6-stage acceptance test mirroring the shape of `scripts/pi-telegram-tts-smoke-test.sh`: (1) jiti load + module-load registration, (2) re-load idempotency, (3) unconfigured fall-through, (4) config merge (flat v0.8.0 shape), (5) invalid `base_url` → network error, (6) optional live STT round-trip (gated by `--no-network`). All 6 stages green locally (including the live round-trip in full mode — the local `whisper-server` returned `"你"` against a 1s silent OGG, confirming the bundled provider reaches the system service end-to-end).
+- `docs/PI-TELEGRAM-TTS-PLAN.md` and `docs/UPSTREAM-API-COMPLIANCE.md` — will be updated in the v0.8.0 release commit.
+- `AGENTS.md` — this v0.22.0 changelog section.
+
+What this means for the operator's running pi:
+- **No change needed for existing configs.** The reader still accepts the legacy `extensions["pi-openai-stt"].base_url` / `.api_key` block, so operators who haven't migrated will keep working.
+- **Recommended migration** (5 lines in `telegram.json`): move the `base_url` block from `extensions["pi-openai-stt"]` to the top level of `extensions["pi-telegram-stt"]`. The first time the section UI saves a config, the legacy block is dropped in favor of the new flat shape.
+- **The `pi-openai-stt` npm package is deprecated** — `npm install pi-openai-stt` will print a deprecation warning (via the npm web UI's "Deprecate package" button, same path as Phase 1). The new install path is just `npm install pi-telegram-stt@latest`.
+- **The dev shim at `~/.pi/agent/extensions/pi-openai-stt.ts` is no longer needed** — the provider loads as part of `pi-telegram-stt`. (If the shim is still in place, the file no longer exists, so the load would fail. The maintainer should remove the shim.)
+
+What comes next (the remaining 1 phase of the consolidation):
 - **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts` (via web UI).
 
 See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).

@@ -3,6 +3,28 @@
  *
  * ## Version history
  *
+ * v0.8.0 — subsume `pi-openai-stt` into this package. The
+ *         OpenAI-compatible STT provider (the in-process client
+ *         in `openai-stt.ts`, previously in a separate npm
+ *         package) is now bundled. At module load, this file
+ *         registers the provider in the in-process registry
+ *         with id `"pi-openai-stt"` (same id as before, so any
+ *         operator with `stt_provider: "pi-openai-stt"` in their
+ *         config keeps working). The `SttProvider` seam in
+ *         `stt-provider.ts` stays as a private in-package
+ *         interface for future backends. The peer-dep on the
+ *         separate `pi-openai-stt` package is removed from
+ *         `package.json`; the npm registry package
+ *         `pi-openai-stt` is now deprecated.
+ *
+ *         The OpenAI provider's `base_url` / `apiKey` config
+ *         fields move from a separate `extensions["pi-openai-stt"]`
+ *         block to top-level keys under
+ *         `extensions["pi-telegram-stt"]`. The reader still
+ *         accepts the legacy `extensions["pi-openai-stt"]` block
+ *         for operators who haven't migrated yet. See
+ *         `README.md`'s "Migration from 0.7.2" section.
+ *
  * v0.7.2 — rename `extensions["pi-telegram-stt"].echoEnabled` to
  *         `showTranscript`. Naming symmetry with the bridge's
  *         `voice.sendTranscript` (the outbound TTS caption flag):
@@ -147,6 +169,13 @@
  *      the section's toggle button or provider picker) takes
  *      effect on the next inbound voice message.
  *
+ * v0.8.0 also adds a third top-level side effect: at module
+ * load, the OpenAI provider is registered in the in-process
+ * `SttProvider` registry (id `"pi-openai-stt"`, same as the
+ * deprecated external package). This keeps the load-order
+ * invariant from v0.3.1 (provider in the registry before any
+ * `session_start` fires).
+ *
  * The watcher fires only on a real `telegram.json` change
  * (`filename` matches the base name). Sibling writes to the
  * agent dir (sessions, logs, state) are ignored — they would
@@ -162,10 +191,10 @@
  *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
  *
  * Required host-side runtime (NOT bundled):
- *   - `pi-openai-stt` peer-dep installed and registered
- *     (the default since v0.5.0; talks to any OpenAI-compatible
- *     API gateway — OpenAI's actual API, the local `fw-openai-sts`
- *     shim, `faster-whisper-server`, etc.).
+ *   - The OpenAI-compatible STT provider is bundled as of v0.8.0
+ *     (it talks to any OpenAI-compatible API gateway — OpenAI's
+ *     actual API, the local `fw-openai-sts` shim,
+ *     `faster-whisper-server`, etc.).
  *   - The bridge's `telegram.json` `inboundHandlers` should be
  *     empty so this extension is the only STT path.
  */
@@ -179,8 +208,74 @@ import { makeLogger } from "./_logger.js";
 import { registerEchoHandlers } from "./echo-handler.js";
 import { registerEchoSection } from "./echo-section.js";
 import { loadEchoConfig } from "./telegram-config.js";
+import {
+	registerSttProvider,
+	unregisterSttProvider,
+	ProviderError,
+	type SttProvider,
+	type SttRequest,
+} from "./stt-provider.js";
+import { transcribe, OpenAiSttError } from "./openai-stt.js";
 
 const log = makeLogger("pi-telegram-stt");
+
+// ---------------------------------------------------------------------------
+// v0.8.0: register the OpenAI-compatible STT provider at module load
+// (previously in a separate `pi-openai-stt` npm package; same id and
+// behavior, just in-package now). The `SttProvider` interface stays as a
+// private in-package seam for future backends.
+// ---------------------------------------------------------------------------
+
+const PROVIDER_ID = "pi-openai-stt";
+
+const openaiProvider: SttProvider = {
+	id: PROVIDER_ID,
+	label: "🟢 OpenAI (any compatible)",
+	async transcribe(req: SttRequest): Promise<string> {
+		log.info("transcribe start", { file: req.inputPath, lang: req.lang });
+		try {
+			const text = await transcribe({ inputPath: req.inputPath, lang: req.lang });
+			log.info("transcribe ok", { chars: text.length });
+			return text;
+		} catch (err) {
+			// Re-throw as `ProviderError` so the bridge's runtime-event
+			// handler sees the same `code: 1|2|3|4` taxonomy as the
+			// old monolithic used. `OpenAiSttError` is a direct
+			// subclass of `Error` with the right shape; we wrap to
+			// keep the `ProviderError` brand for the registry
+			// contract.
+			if (err instanceof OpenAiSttError) {
+				log.error("transcribe failed", {
+					code: err.code,
+					detail: err.detail ? JSON.stringify(err.detail) : undefined,
+					error: err.message,
+				});
+				throw new ProviderError(err.message, err.code, err.detail);
+			}
+			log.error("transcribe failed (unwrapped)", { error: err instanceof Error ? err.message : String(err) });
+			throw new ProviderError(
+				err instanceof Error ? err.message : String(err),
+				1,
+			);
+		}
+	},
+};
+
+// Register at module load (synchronous top-level side effect, same
+// pattern the first STT provider package proved out). The provider
+// is in the registry before any session_start fires, before any
+// message is processed. Idempotent: if a previous session's
+// `session_shutdown` didn't clean up, the globalThis-backed
+// registry still holds the entry, and we re-register.
+try {
+	registerSttProvider(openaiProvider);
+	log.info("registered at module load", { id: PROVIDER_ID });
+} catch (e) {
+	log.warn("register at module load failed, retrying after unregister", { error: e instanceof Error ? e.message : String(e) });
+	unregisterSttProvider(PROVIDER_ID);
+	registerSttProvider(openaiProvider);
+	log.info("registered at module load (after retry)", { id: PROVIDER_ID });
+}
 
 export default function piTelegramEcho(pi: ExtensionAPI): void {
 	let handlerDisposers: Array<() => void> = [];
@@ -248,6 +343,17 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 		registerSectionOnce();
 		reconfigureHandlers();
 		startConfigWatcher();
+		// v0.8.0: re-register the bundled OpenAI provider defensively
+		// (the module-load side effect already did it; this guards
+		// against a hot-reload that unregistered without
+		// re-registering). Idempotent.
+		try {
+			registerSttProvider(openaiProvider);
+			log.debug("re-registered on session_start", { id: PROVIDER_ID });
+		} catch {
+			// Already registered; ignore.
+			log.debug("already registered, skip re-register", { id: PROVIDER_ID });
+		}
 		log.info("session_start done", {
 			showTranscript: loadEchoConfig().showTranscript,
 			sttProvider: loadEchoConfig().stt_provider,
@@ -272,5 +378,11 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 			configWatcher.close();
 			configWatcher = null;
 		}
+		// v0.8.0: unregister the bundled OpenAI provider so a
+		// fresh session_start re-registers cleanly. The module-load
+		// side effect would re-register anyway, but this keeps the
+		// session lifecycle symmetric (register on start, unregister
+		// on shutdown).
+		unregisterSttProvider(PROVIDER_ID);
 	});
 }

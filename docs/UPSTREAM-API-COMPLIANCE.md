@@ -28,9 +28,8 @@ latter.
 | `extensions/pi-telegram-stt/echo-section.ts` | `@llblab/pi-telegram/sections` | `docs/sections.md` |
 | `extensions/pi-telegram-stt/telegram-config.ts` | `getAgentDir` from `@earendil-works/pi-coding-agent` | `dist/config.js` |
 | `extensions/pi-telegram-stt/stt-provider.ts` | (local contract; not a public API) | n/a |
-| `extensions/pi-openai-stt/index.ts` | `ExtensionAPI` (factory shape) | `extensions.md` |
-| `extensions/pi-openai-stt/openai-stt.ts` | `getAgentDir` from `@earendil-works/pi-coding-agent` | `dist/config.js` |
-| `extensions/pi-voice-telegram-scripts/*` | (CLI scripts; not Pi extensions) | n/a |
+| `extensions/pi-telegram-stt/openai-stt.ts` | `getAgentDir` from `@earendil-works/pi-coding-agent` (subsumed from `pi-openai-stt` in v0.8.0) | `dist/config.js` |
+| `extensions/pi-voice-telegram-scripts/*` | (CLI scripts; not Pi extensions; deprecated in v0.2.0, scripts merged into `pi-telegram-tts`) | n/a |
 
 The `pi-voice-telegram-scripts` package is **not** a Pi extension — it
 ships CLI scripts (`tts-minimax.mjs`, `tts-openai.mjs`,
@@ -39,7 +38,9 @@ ships CLI scripts (`tts-minimax.mjs`, `tts-openai.mjs`,
 per `docs/TTS-VIA-OUTBOUND-HANDLERS.md`. They are not subject to the
 extension-API audit; their contract is the bridge's command-template
 placeholder surface, documented in
-`docs/TTS-VIA-OUTBOUND-HANDLERS.md`.
+`docs/TTS-VIA-OUTBOUND-HANDLERS.md`. (As of v0.2.0, the scripts are
+merged into `pi-telegram-tts` and exposed via that package's `bin`
+field; the `pi-voice-telegram-scripts` npm package is deprecated.)
 
 ## Findings — 2026-08-23 audit
 
@@ -58,40 +59,30 @@ Upstream versions checked against:
 | `sendTelegramView` from `@llblbl/pi-telegram/delivery` | Send 🎙️ echo | ✅ matches `docs/public-api.md` Programmatic API Matrix |
 
 Pattern compliance:
-- ✅ **Module-load provider registration** — `pi-openai-stt/index.ts` registers the STT provider at the top level (synchronous side effect during jiti load), avoiding the load-order race documented in `pi-telegram-stt/index.ts` v0.3.1 history. This is the same pattern `docs/voice.md:42` documents.
+- ✅ **Module-load provider registration** — `pi-telegram-stt/index.ts` (since v0.8.0) registers the bundled OpenAI STT provider at the top level (synchronous side effect during jiti load), avoiding the load-order race documented in v0.3.1 history. Previously this was in `pi-openai-stt/index.ts`; the subsume moved it to the orchestrator's `index.ts`. This is the same pattern `docs/voice.md:42` documents.
 - ✅ **`globalThis`-backed registry** — the in-process STT provider registry lives on `globalThis.__piTelegramSttProviderRegistry__`, matching the bridge's own pattern in `lib/sections.ts:267-271`.
 - ✅ **Section id shape** — `"pi-telegram-stt/echo"` uses npm-style package identity per `docs/sections.md` §3 (the package name is the owner identity).
 - ✅ **Error taxonomy** — `ProviderError.code: 1|2|3|4` (1=usage, 2=network, 3=4xx, 4=5xx) matches the bridge's existing `WhisperSttError` shape and the upstream `recordTelegramRuntimeEvent` consumers' expectations.
 
-### 2. Public API surface usage — `pi-openai-stt`
+### 2. Public API surface usage — `pi-telegram-stt` (bundled OpenAI provider, since v0.8.0)
 
 | Runtime API | Used as | Compliance |
 |---|---|---|
-| `ExtensionAPI` from `@earendil-works/pi-coding-agent` | Default factory function `(pi) => { ... }` | ✅ matches `docs/extensions.md` "Extension Styles" |
-| `pi.on("session_start")`, `pi.on("session_shutdown")` | Session lifecycle hooks | ✅ matches `docs/extensions.md` Session Events |
+| `registerSttProvider` / `unregisterSttProvider` / `getSttProvider` / `listSttProviders` from `./stt-provider.js` (in-package) | Local seam; same pattern the bridge uses for its section registry | ✅ in-package contract; not an upstream API |
 | `getAgentDir` from `@earendil-works/pi-coding-agent` | Resolves `~/.pi/agent` honoring `PI_CODING_AGENT_DIR` | ✅ matches `dist/config.js:412-418` |
 
 ### 3. Path-resolution helper consistency
 
-The two extensions used to resolve `~/.pi/agent` differently:
+After the v0.8.0 subsume, the OpenAI provider lives in
+`extensions/pi-telegram-stt/openai-stt.ts`. Its `readOpenAiKeyFromAuthJson`
+and `readTelegramJsonSttConfig` resolve `~/.pi/agent` via
+`getAgentDir()`, matching the sibling `telegram-config.ts:40`. No
+deviation; both files spell the path the same way.
 
-- `extensions/pi-telegram-stt/telegram-config.ts:40` —
-  `process.env.PI_CODING_AGENT_DIR ?? getAgentDir()`.
-- `extensions/pi-openai-stt/openai-stt.ts:149,190` —
-  `process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent")`.
-
-This was a **deviation** flagged in the 2026-08-23 audit. The two
-implementations are behavior-equivalent (`getAgentDir()` honors
-`PI_CODING_AGENT_DIR` internally at `dist/config.js:413-416`), but the
-duplication is a design smell — two ways to spell the same thing in
-the same repo is a future drift hazard.
-
-**Resolution applied** (commit e041931 follow-up):
-`extensions/pi-openai-stt/openai-stt.ts` now uses `getAgentDir()`
-directly, matching the sibling file. The redundant
-`process.env.PI_CODING_AGENT_DIR` env-var check in
-`telegram-config.ts:40` could be simplified in a follow-up, but is
-left as-is to keep this audit's diff scope minimal.
+The `process.env.PI_CODING_AGENT_DIR ?? getAgentDir()` pattern is
+preserved in `telegram-config.ts:40` for explicitness (the env-var
+override is the only way to point the test harness at a sidecar
+agent dir; see `scripts/pi-telegram-stt-smoke-test.sh:142`).
 
 **Behavioral equivalence proof** (verification log):
 
@@ -116,11 +107,14 @@ The following upstream-canonical patterns are observed correctly:
 - **Self-contained packages** — every extension bundles its own
   `_logger.ts` rather than sharing one at the repo root, so each
   npm-published package is plain-`npm install`-able (the README
-  documents this as a v0.7.0 / v0.3.0 design decision).
+  documents this as a v0.7.0 / v0.3.0 / v0.8.0 design decision).
 - **Outbound template fidelity** — the scripts are invoked by absolute
   path with `{text}`, `{mp3}`, `{ogg}` placeholders per
   `docs/TTS-VIA-OUTBOUND-HANDLERS.md` and the bridge's
-  `command-templates.ts` substitution surface.
+  `command-templates.ts` substitution surface. As of v0.2.0, the
+  scripts are bundled inside `pi-telegram-tts` and exposed via the
+  package's `bin` field — operators can run `tts-minimax --help` /
+  `tts-openai --help` after `npm install pi-telegram-tts`.
 - **Error exit-code model** — the scripts exit 2 (caller config), 3
   (API/HTTP), 4 (write failed) so `recordTelegramRuntimeEvent`
   consumers can correlate the failure mode from stderr.

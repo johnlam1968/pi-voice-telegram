@@ -2,7 +2,16 @@
 
 Voice echo extension for the Pi coding agent + [@llblab/pi-telegram](https://github.com/llblab/pi-telegram) bridge. Adds the 🎙️ reply showing the STT transcript of inbound voice/audio messages.
 
-**STT is delegated to a peer-dep provider extension**. The default is [`pi-openai-stt`](../pi-openai-stt/README.md) — a single provider that talks to any OpenAI-compatible gateway (OpenAI's actual API, the local `fw-openai-sts` shim, `faster-whisper-server`, etc.) with a fallback-chain config. The provider is selected via `extensions["pi-telegram-stt"].stt_provider` in `telegram.json`. The provider contract lives in `./stt-provider.ts`; any extension that implements it can plug in.
+**As of v0.8.0, the OpenAI-compatible STT provider is bundled inside this package.** Previously it lived in a separate `pi-openai-stt` npm package (now deprecated). The bundled provider is registered at module load with id `"pi-openai-stt"` (same id, so existing `stt_provider: "pi-openai-stt"` configs keep working without change). The `SttProvider` interface stays as a private in-package seam (`./stt-provider.ts`) for future backends.
+
+The bundled provider talks to any OpenAI-compatible API gateway:
+- OpenAI's actual API (`base_url="https://api.openai.com/v1"`, `apiKey=sk-...`)
+- The local `fw-openai-sts` shim (the on-host CUDA `whisper-server` exposed as OpenAI-compatible)
+- `faster-whisper-server` with `--enable-openai-api`
+- `whisper-asr-webservice`
+- Any other OpenAI-compatible gateway
+
+`base_url` accepts a string (single URL) or a string[] (fallback chain — local first, cloud second is the natural on-host shape).
 
 ## Install
 
@@ -14,17 +23,11 @@ export { default } from "/path/to/this/repo/extensions/pi-telegram-stt/index.ts"
 EOF
 ```
 
-And for the default STT provider (`pi-openai-stt`):
+That's it — the OpenAI STT provider is bundled, no separate shim install needed.
 
-```bash
-cat > ~/.pi/agent/extensions/pi-openai-stt.ts <<'EOF'
-export { default } from "/path/to/this/repo/extensions/pi-openai-stt/index.ts";
-EOF
-```
+The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source.
 
-The absolute path import is intentional: `pi -e` resolves relative imports against the loader file's directory, not against the dev source. An absolute path keeps the source's relative imports (`../pi-telegram-stt/stt-provider.js` to reach the contract) resolvable from the source dir.
-
-For the cluster install path, `npm install file:/path/to/this/dir` for each of `pi-telegram-stt` and `pi-openai-stt` from `~/.pi/agent/npm/`.
+For the cluster install path, `npm install file:/path/to/this/dir` for `pi-telegram-stt` from `~/.pi/agent/npm/`.
 
 ## Configure
 
@@ -35,9 +38,7 @@ Edit `~/.pi/agent/telegram.json`:
   "extensions": {
     "pi-telegram-stt": {
       "showTranscript": true,
-      "stt_provider": "pi-openai-stt"
-    },
-    "pi-openai-stt": {
+      "stt_provider": "pi-openai-stt",
       "base_url": ["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]
     }
   }
@@ -51,22 +52,52 @@ Edit `~/.pi/agent/telegram.json`:
 > `echoEnabled` as a fallback; the section UI's toggle writes the
 > new key, so the config file migrates itself on first edit.
 
-`stt_provider` defaults to `"pi-openai-stt"`. `pi-openai-stt`'s `base_url` is a string (single gateway) or a string[] (fallback chain — local first, cloud second is the natural on-host shape). See [`pi-openai-stt`](../pi-openai-stt/README.md) for the full config matrix.
+> **v0.8.0 flat config:** `base_url` and `apiKey` moved from
+> `extensions["pi-openai-stt"]` to top-level keys under
+> `extensions["pi-telegram-stt"]`. The reader still accepts the
+> legacy `extensions["pi-openai-stt"]` block for backward
+> compatibility (read-only), but `saveEchoConfig` only writes
+> the new flat shape. See the migration section below.
+
+`stt_provider` defaults to `"pi-openai-stt"` (the only bundled provider; the seam is kept for future backends). The bundled provider's `base_url` is a string (single gateway) or a string[] (fallback chain).
 
 The on-host CUDA `whisper-server` runs behind the `fw-openai-sts` shim — same VRAM, same model, ~1ms of HTTP overhead. To run only the cloud path, set `base_url: "https://api.openai.com/v1"` and provide a key via env / `auth.json` / `telegram.json`.
 
 **Make sure `telegram.json.inboundHandlers` is empty (or absent)** so this extension is the only STT path; otherwise the bridge's stronger handler will run first and bypass the echo.
 
+## Migration from 0.7.2
+
+If you have an existing `telegram.json` with the old `pi-openai-stt` block:
+
+```diff
+ "extensions": {
+   "pi-telegram-stt": {
+     "showTranscript": true,
+-    "stt_provider": "pi-openai-stt"
++    "stt_provider": "pi-openai-stt",
++    "base_url": ["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]
+   },
+-  "pi-openai-stt": {
+-    "base_url": ["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]
+-  }
++  // remove the pi-openai-stt block (the provider is now bundled)
+ }
+```
+
+The reader still accepts the legacy `extensions["pi-openai-stt"]` block, so your existing config will keep working even if you don't migrate. But `saveEchoConfig` (the section UI's write path) only writes the new flat shape, so the first time you toggle a setting via the section UI, the old `pi-openai-stt` block will be ignored in favor of the new flat keys.
+
+The npm package `pi-openai-stt` is deprecated; `npm install pi-openai-stt` will print a deprecation warning. The new install path is just `npm install pi-telegram-stt@latest`.
+
 ## Section UI
 
 `/telegram-settings` → 🎙️ Echo → toggle on/off + pick the STT provider from the installed list. The section writes to `telegram.json`, the hot-reload watcher (200ms debounce) picks up the change, and the next inbound voice message uses the new setting.
 
-## Provider contract
+## Provider contract (for future backends)
 
-A provider is a Pi extension that calls `registerSttProvider(provider)` at module load with an `SttProvider` instance:
+The `SttProvider` interface in `./stt-provider.ts` is a private in-package seam. For a new backend (e.g. a non-OpenAI speech model), add a `stt-<backend>.ts` file in this package and register it at module load in `index.ts`:
 
 ```typescript
-import { registerSttProvider, unregisterSttProvider, type SttProvider } from "pi-telegram-stt/stt-provider";
+import { registerSttProvider, unregisterSttProvider, type SttProvider } from "./stt-provider.js";
 
 const provider: SttProvider = {
   id: "my-stt",
@@ -78,22 +109,14 @@ const provider: SttProvider = {
 };
 
 // Register at module load (synchronous top-level side effect, same
-// pattern as pi-openai-stt v0.3.1). The provider is in the registry
-// before any session_start fires, before any message is processed.
+// pattern the bundled OpenAI provider uses). The provider is in
+// the registry before any session_start fires, before any message
+// is processed.
 try {
   registerSttProvider(provider);
 } catch {
   unregisterSttProvider("my-stt");
   registerSttProvider(provider);
-}
-
-export default function myStt(pi) {
-  pi.on("session_start", () => {
-    try { registerSttProvider(provider); } catch { /* already registered */ }
-  });
-  pi.on("session_shutdown", () => {
-    unregisterSttProvider("my-stt");
-  });
 }
 ```
 

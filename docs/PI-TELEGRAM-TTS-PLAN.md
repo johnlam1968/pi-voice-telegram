@@ -78,10 +78,12 @@ not hand-rolled `section:` strings").
 | **v0.1.1** — Bridge callable contract (in-session fix) | ✅ **SHIPPED** | 2026-08-23 | Live test caught that bridge v0.36.11 requires `typeof provider === "function"`; v0.1.0 source shipped an object literal that satisfied TypeScript but failed the bridge's runtime gate (`outbound-voice.ts:235-244`). Fixed: `index.ts` wraps `synthesizeCall` (an async function) with `Object.assign(callable, { getVoicePromptContribution })` — the same pattern the bridge itself uses in `voice.ts:131-141`. Pinned by smoke stage 13. |
 | **v0.1.2** — 4-package re-bump | ✅ **SHIPPED** | 2026-08-23 | No-content re-bump to (a) trigger the publish workflow to also publish the `pi-telegram-tts` step that the v0.20.0 workflow file change was missing, and (b) support the `echoEnabled → showTranscript` rename in `pi-telegram-stt@0.7.2` (see below). |
 | **`pi-telegram-stt@0.7.2`** — `echoEnabled → showTranscript` rename | ✅ **SHIPPED** | 2026-08-23 | Naming symmetry with the bridge's `voice.sendTranscript`: `pi-telegram-stt.showTranscript` is the inbound direction (show the user's voice as a text message), `voice.sendTranscript` is the outbound direction (send the agent's voice as a caption). The reader accepts the old `echoEnabled` key as a fallback; the section UI's toggle writes the new key. |
-| **Repo-wide consolidation** | ⏳ next | — | See `docs/CONSOLIDATION-PLAN.md` for the full plan. Reduces the active package count from 4 to 2 by (a) subsuming `pi-openai-stt` into `pi-telegram-stt` (in-code abstraction; the `SttProvider` interface stays), and (b) merging `pi-voice-telegram-scripts` into `pi-telegram-tts` (the `tts-{minimax,openai}` bins are exposed via the package's `bin` field). The 3 superseded packages are deprecated on npm. Target: `pi-telegram-stt@0.8.0` + `pi-telegram-tts@0.2.0`. |
-| **v0.2.0** — Section UI | pending | — | Unblocked: `loadSynthConfig()` already reads on every call (live edit takes effect on next voice-tagged turn); only needs `saveSynthConfig` (atomic temp+rename, mirror `pi-telegram-stt/telegram-config.ts:71-96`) + `section.ts` mirroring `pi-telegram-stt/echo-section.ts:26-114`. |
-| **v0.3.0** — Per-provider config schema | pending | — | No code in this session; `telegram-config.ts` is already structured to extend (sub-block overrides top-level). |
-| **v0.4.0** — UI-driven config | pending | — | Depends on v0.2.0 + v0.3.0. |
+| **`pi-telegram-stt@0.8.0`** — subsume `pi-openai-stt` (Phase 2) | ✅ **SHIPPED** | 2026-08-23 | The OpenAI-compatible STT provider (in-process client + registry registration) is now bundled inside `pi-telegram-stt`. The `SttProvider` interface stays as a private in-package seam for future backends. The `base_url` / `apiKey` config fields move from a separate `extensions["pi-openai-stt"]` block to top-level keys under `extensions["pi-telegram-stt"]` (with a read-only legacy fallback). All 6 stages of the new `scripts/pi-telegram-stt-smoke-test.sh` green. The `pi-openai-stt` npm package is deprecated (via the npm web UI). |
+| **Repo-wide consolidation** | ⏳ Phase 3 next | — | See `docs/CONSOLIDATION-PLAN.md` for the full plan. Phase 2 done. Phase 3 merges `pi-voice-telegram-scripts` into `pi-telegram-tts` (the `tts-{minimax,openai}` bins are exposed via the package's `bin` field). After Phase 3, the active package count is 2 (`pi-telegram-stt@0.8.0` + `pi-telegram-tts@0.2.0`). |
+| **`pi-telegram-tts@0.2.0`** — merge `pi-voice-telegram-scripts` (Phase 3) | pending | — | The `tts-minimax.mjs` and `tts-openai.mjs` scripts move from `extensions/pi-voice-telegram-scripts/` into `extensions/pi-telegram-tts/`. The package's `bin` field exposes both. `fw-openai-sts.ts` is dropped (replaced by the system service). `pi-voice-telegram-scripts` npm package is deprecated. |
+| **v0.3.0** — Section UI | pending | — | Unblocked: `loadSynthConfig()` already reads on every call (live edit takes effect on next voice-tagged turn); only needs `saveSynthConfig` (atomic temp+rename, mirror `pi-telegram-stt/telegram-config.ts:71-96`) + `section.ts` mirroring `pi-telegram-stt/echo-section.ts:26-114`. |
+| **v0.4.0** — Per-provider config schema | pending | — | No code in this session; `telegram-config.ts` is already structured to extend (sub-block overrides top-level). |
+| **v0.5.0** — UI-driven config | pending | — | Depends on v0.3.0 + v0.4.0. |
 
 ### v0.1.0 actual file sizes vs. estimate
 
@@ -242,8 +244,10 @@ config so the provider and the template can converge. If
 the top level of `index.ts` (synchronous side effect during jiti load)
 **and** idempotent re-register on `session_start`. Disposer from the
 session_start call is pushed onto the disposers array; the module-load
-registration lives for the process lifetime. Same pattern as
-`pi-openai-stt/index.ts:96-110` and `pi-telegram-stt/index.ts:237-248`.
+registration lives for the process lifetime. Same pattern as the
+OpenAI STT provider's module-load registration in
+`pi-telegram-stt/index.ts` (subsumed in v0.8.0; previously
+`pi-openai-stt/index.ts:96-110`).
 
 **Verification (v0.1.0 acceptance):**
 
@@ -254,7 +258,8 @@ registration lives for the process lifetime. Same pattern as
 - Path-resolution equivalence: `getAgentDir()` returns the same value as
   the hand-rolled `process.env.PI_CODING_AGENT_DIR ?? ~/.pi/agent` (the
   pattern `pi-telegram-stt/telegram-config.ts:40` and our own
-  `pi-openai-stt/openai-stt.ts:148-191` use).
+  `pi-telegram-stt/openai-stt.ts` use, which was previously
+  `pi-openai-stt/openai-stt.ts:148-191` before the v0.8.0 subsume).
 - Operator smoke: with the provider configured, the agent's voice
   reply carries the transcript as the Telegram caption.
 
@@ -548,8 +553,9 @@ v0.2.0 adds `section.ts`. v0.4.0 adds `ui-schema.ts`.
 - `@llblab/pi-telegram-extension-demo` (`github.com/llblab/pi-telegram-extension-demo`)
   — the pattern reference for section + command + UI patterns.
 - `extensions/pi-telegram-stt/` — the sister package we mirror
-  (package shape, lifecycle, section UI shape).
-- `extensions/pi-openai-stt/index.ts:96-110` — the module-load
-  registration pattern.
+  (package shape, lifecycle, section UI shape). The OpenAI
+  STT provider that previously lived at
+  `extensions/pi-openai-stt/index.ts:96-110` is now bundled
+  here as of v0.8.0 — same module-load registration pattern.
 - `extensions/pi-telegram-stt/telegram-config.ts:71-96` — the atomic
   config write pattern (`saveEchoConfig`).
