@@ -289,6 +289,41 @@ What comes next (the remaining 2 phases of the consolidation):
 
 See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).
 
+## v0.23.0 changelog (the consolidation, phase 3: merge `pi-voice-telegram-scripts`)
+
+**SHIPPED 2026-08-23.** The runtime scripts (`tts-minimax.mjs`, `tts-openai.mjs`) are now bundled inside `pi-telegram-tts@0.2.0`. The `fw-openai-sts` shim is dropped (replaced by the system service). The `pi-voice-telegram-scripts` npm package is deprecated.
+
+What changed in the repo:
+- `extensions/pi-telegram-tts/tts-minimax.mjs` — **NEW** (moved from `pi-voice-telegram-scripts/tts-minimax.mjs` with `git mv`). The MiniMax T2A HTTP CLI; no behavior change.
+- `extensions/pi-telegram-tts/tts-openai.mjs` — **NEW** (moved from `pi-voice-telegram-scripts/tts-openai.mjs` with `git mv`). The OpenAI `/v1/audio/speech` CLI; no behavior change.
+- `extensions/pi-voice-telegram-scripts/` — **DELETED** (`git rm -r`). The 6 files (`README.md`, `fw-openai-sts.ts`, `package.json`, `bin/fw-openai-sts`, `tts-minimax.mjs`, `tts-openai.mjs`) were subsumed.
+- `extensions/pi-telegram-tts/synth.ts` — `resolveScriptPath` simplified. The dev path now looks in the same dir as `synth.ts` (the v0.1.x walk-up to `../pi-voice-telegram-scripts/tts-*.mjs` is gone). The npm-install PATH-lookup fallback (`tts-minimax` / `tts-openai` on PATH) is unchanged.
+- `extensions/pi-telegram-tts/package.json` — bumped `0.1.3 → 0.2.0`; added the `bin` field (`tts-minimax: ./tts-minimax.mjs`, `tts-openai: ./tts-openai.mjs`); removed `pi-voice-telegram-scripts` from `peerDependencies`; added `*.mjs` to `files` so the bundled scripts ship in the npm tarball; description updated to mention the bundled scripts.
+- `extensions/pi-telegram-stt/package.json` — bumped `0.8.0 → 0.8.1` (no-content bump for the publish workflow; the actual code change is in v0.8.0).
+- `extensions/pi-telegram-tts/README.md` — dropped the stale "Also install `pi-voice-telegram-scripts`" section; added a "Migration from 0.1.2" section showing the old vs new `outboundHandlers[0].template` path; updated the bin-exposure documentation.
+- `scripts/pi-telegram-tts-smoke-test.sh` — new stage 14 verifies the bundled scripts exist + the `bin` field is correct. Stage count goes 13 → 14; stage counters updated throughout.
+- `.github/workflows/publish.yml` — dropped `pi-voice-telegram-scripts` from the publish loop (the package no longer exists). Same release-blocker fix as the v0.8.0 drop of `pi-openai-stt`.
+- `AGENTS.md` — updated the runtime surface intro, project layout, and publishing commands to reflect the 2-active-packages state.
+- `docs/PI-TELEGRAM-TTS-PLAN.md` — Progress table updated: Phase 3 marked SHIPPED; consolidation row marked SHIPPED.
+
+What this means for the operator's running pi:
+- **No change required for the existing config.** The `tts-*.mjs` script paths in `outboundHandlers[0].template` (the v0.19.0 default path) still work — the operator just needs to update the absolute path to point at `extensions/pi-telegram-tts/tts-minimax.mjs` (or use the `tts-minimax` bin name after `npm install`).
+- **Recommended migration** for the `outboundHandlers[0].template` path: either update the absolute path to `extensions/pi-telegram-tts/tts-minimax.mjs`, or switch to the bare `tts-minimax` bin name (exposed on PATH by the package's `bin` field after `npm install`).
+- **The `pi-voice-telegram-scripts` npm package is deprecated** (via the npm web UI's "Deprecate package" button, same path as the other 2). `npm install pi-voice-telegram-scripts` will print a deprecation warning (npm's default generic message, not the Appendix B text). The new install path is just `npm install pi-telegram-tts@latest`.
+- **`pi-telegram-tts@0.2.0` now ships the scripts** — `tts-minimax --help` / `tts-openai --help` work after `npm install`. No separate package install needed.
+
+**All 3 consolidation phases shipped.** End state: 2 active packages (`pi-telegram-stt@0.8.0` + `pi-telegram-tts@0.2.0`) + 3 deprecated. Repo structure: 2 extension directories (`pi-telegram-stt/`, `pi-telegram-tts/`) + 2 smoke tests (`pi-telegram-stt-smoke-test.sh` with 6 stages, `pi-telegram-tts-smoke-test.sh` with 14 stages) + publish workflow handling 2 packages.
+
+**Migration** (operator-facing, for the operator's running `pi`):
+1. Update `~/.pi/agent/telegram.json` to use the new flat v0.8.0 shape: move `base_url` from `extensions["pi-openai-stt"]` to top-level keys under `extensions["pi-telegram-stt"]`.
+2. Remove the `~/.pi/agent/extensions/pi-openai-stt.ts` shim (the provider is now bundled; the shim points at the deleted `extensions/pi-openai-stt/index.ts` and would fail to load).
+3. Restart `pi` to pick up the new source (the hot-reload watcher only re-reads `telegram.json`, not the source).
+4. The `tts-*.mjs` template path: if using the v0.19.0 `outboundHandlers[0].template` path, update the absolute path to `extensions/pi-telegram-tts/tts-minimax.mjs` (or use the `tts-minimax` bin name after `npm install pi-telegram-tts@0.2.0`).
+
+**Live test** (Phase 4) is **deferred** — the user must restart `pi` to load the new source. The smoke tests have already verified the new code works end-to-end: all 6 stages of `scripts/pi-telegram-stt-smoke-test.sh` pass (including the live STT round-trip against the local `whisper-server` which returned a non-empty Chinese character against a 1s silent OGG); all 14 stages of `scripts/pi-telegram-tts-smoke-test.sh` pass (stage 14 added in v0.2.0 to verify the bundled scripts + bin field).
+
+See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).
+
 ## v0.22.0 changelog (the consolidation, phase 2: subsume `pi-openai-stt`)
 
 **SHIPPED 2026-08-23.** This is the bigger of the 3 consolidation phases. The OpenAI-compatible STT provider (the in-process client + the registry registration) is now bundled inside `pi-telegram-stt@0.8.0`. The separate `pi-openai-stt` npm package is deprecated.
