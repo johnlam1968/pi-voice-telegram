@@ -283,7 +283,9 @@ What this means for the operator's running pi:
 
 What comes next (the remaining 2 phases of the consolidation):
 - **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt` (via web UI). ✅ SHIPPED 2026-08-23 (this session). See "v0.22.0 changelog" below.
-- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts` (via web UI).
+- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts` (via web UI). ✅ SHIPPED 2026-08-23 (this session). See "v0.23.0 changelog" below.
+
+✅ **All 3 consolidation phases shipped.** End state: 2 active packages (`pi-telegram-stt@0.8.0` + `pi-telegram-tts@0.2.0`) + 3 deprecated. See the v0.23.0 changelog below for the operator-facing migration steps.
 
 See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B — the messages in Appendix B are the IDEAL text but won't appear on npm because the web UI uses a default).
 
