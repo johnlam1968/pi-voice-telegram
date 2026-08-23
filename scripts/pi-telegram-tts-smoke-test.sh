@@ -161,7 +161,7 @@ hr()  { printf -- "------------------------------------------------------------\
 # 1. jiti load + module-load registration
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 1/12 — jiti load + module-load registration"
+echo "pi-telegram-tts-smoke-test: stage 1/14 — jiti load + module-load registration"
 
 NODE_CODE='
 const path = require("node:path");
@@ -198,7 +198,7 @@ fi
 # 2. Re-load idempotency
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 2/12 — re-load idempotency"
+echo "pi-telegram-tts-smoke-test: stage 2/14 — re-load idempotency"
 
 NODE_CODE='
 const path = require("node:path");
@@ -224,7 +224,7 @@ fi
 # 3. Unconfigured fall through (no telegram.json)
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 3/13 — unconfigured → fall through"
+echo "pi-telegram-tts-smoke-test: stage 3/14 — unconfigured → fall through"
 
 # PI_CODING_AGENT_DIR was set to a fresh dir; no telegram.json there.
 NODE_CODE='
@@ -251,7 +251,7 @@ fi
 # 4. Disabled fall through
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 4/13 — disabled → fall through"
+echo "pi-telegram-tts-smoke-test: stage 4/14 — disabled → fall through"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -290,7 +290,7 @@ fi
 # 5. Type-guard fall through (invalid provider id)
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 5/13 — invalid provider → fall through"
+echo "pi-telegram-tts-smoke-test: stage 5/14 — invalid provider → fall through"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -329,10 +329,10 @@ fi
 # ---------------------------------------------------------------------------
 hr
 if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 6/13 — live TTS round-trip (skipped: --no-network)"
+  echo "pi-telegram-tts-smoke-test: stage 6/14 — live TTS round-trip (skipped: --no-network)"
   info "re-run without --no-network to exercise the full spawn + ffmpeg path"
 else
-  echo "pi-telegram-tts-smoke-test: stage 6/13 — live TTS round-trip (provider=$PROVIDER voice=$VOICE model=$MODEL)"
+  echo "pi-telegram-tts-smoke-test: stage 6/14 — live TTS round-trip (provider=$PROVIDER voice=$VOICE model=$MODEL)"
 
   # Provider-specific env check. The scripts read from env first, then
   # from the mmx/openai config files.
@@ -410,10 +410,10 @@ fi
 # ---------------------------------------------------------------------------
 hr
 if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 7/13 — sendTranscript true → transcript included (skipped: --no-network)"
+  echo "pi-telegram-tts-smoke-test: stage 7/14 — sendTranscript true → transcript included (skipped: --no-network)"
   info "re-run without --no-network to exercise the spawn + ffmpeg path with sendTranscript=true"
 else
-  echo "pi-telegram-tts-smoke-test: stage 7/13 — sendTranscript true → transcript included"
+  echo "pi-telegram-tts-smoke-test: stage 7/14 — sendTranscript true → transcript included"
 
   cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -460,10 +460,10 @@ fi
 # ---------------------------------------------------------------------------
 hr
 if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 8/13 — sendTranscript false → transcript suppressed (skipped: --no-network)"
+  echo "pi-telegram-tts-smoke-test: stage 8/14 — sendTranscript false → transcript suppressed (skipped: --no-network)"
   info "re-run without --no-network to exercise the spawn + ffmpeg path with sendTranscript=false"
 else
-  echo "pi-telegram-tts-smoke-test: stage 8/13 — sendTranscript false → transcript suppressed"
+  echo "pi-telegram-tts-smoke-test: stage 8/14 — sendTranscript false → transcript suppressed"
 
   cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -542,7 +542,7 @@ if (expectHint) {
 
 # --- 9. hidden: voiceReplyPreferred=false, voiceReplyRequired=false, hasVoiceInput=false
 hr
-echo "pi-telegram-tts-smoke-test: stage 9/13 — getVoicePromptContribution (hidden mode)"
+echo "pi-telegram-tts-smoke-test: stage 9/14 — getVoicePromptContribution (hidden mode)"
 if VIEW_JSON='{}' EXPECT_HINT=0 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "hidden view → undefined"
@@ -552,7 +552,7 @@ else
 fi
 
 # --- 10. mirror + voice: hasVoiceInput=true, voiceReplyPreferred=true
-echo "pi-telegram-tts-smoke-test: stage 10/13 — getVoicePromptContribution (mirror + voice)"
+echo "pi-telegram-tts-smoke-test: stage 10/14 — getVoicePromptContribution (mirror + voice)"
 if VIEW_JSON='{"hasVoiceInput":true,"voiceReplyPreferred":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "mirror+voice view → hint"
@@ -562,7 +562,7 @@ else
 fi
 
 # --- 11. always + text: hasVoiceInput=false, voiceReplyRequired=true
-echo "pi-telegram-tts-smoke-test: stage 11/13 — getVoicePromptContribution (always + text)"
+echo "pi-telegram-tts-smoke-test: stage 11/14 — getVoicePromptContribution (always + text)"
 if VIEW_JSON='{"hasVoiceInput":false,"voiceReplyRequired":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "always+text view → hint"
@@ -572,7 +572,7 @@ else
 fi
 
 # --- 12. always + voice: hasVoiceInput=true, voiceReplyRequired=true
-echo "pi-telegram-tts-smoke-test: stage 12/13 — getVoicePromptContribution (always + voice)"
+echo "pi-telegram-tts-smoke-test: stage 12/14 — getVoicePromptContribution (always + voice)"
 if VIEW_JSON='{"hasVoiceInput":true,"voiceReplyPreferred":true,"voiceReplyRequired":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "always+voice view → hint"
@@ -596,7 +596,7 @@ fi
 # bridge's prompt-contribution loop (`voice.ts:305-312`). No network;
 # runs in `--no-network` mode.
 hr
-echo "pi-telegram-tts-smoke-test: stage 13/13 — bridge callable contract (v0.36.11)"
+echo "pi-telegram-tts-smoke-test: stage 13/14 — bridge callable contract (v0.36.11)"
 
 # Clear telegram.json (stages 6-8 leave a configured one in the
 # temp agent dir). Stage 13 exercises the unconfigured path so the
@@ -648,6 +648,49 @@ if JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE"; then
 else
   fail "provider fails bridge callable contract"
   exit 13
+fi
+
+# ---------------------------------------------------------------------------
+# 14. Bundled scripts exist (v0.2.0: scripts subsumed into this package)
+# ---------------------------------------------------------------------------
+# Stage 14 pins the v0.2.0 file move: the tts-{minimax,openai}.mjs
+# scripts now ship inside this package (previously in the separate
+# `pi-voice-telegram-scripts` package). The `bin` field in
+# `package.json` exposes them on PATH after `npm install`. Stage 14
+# verifies the source files exist in the package dir (the dev path
+# `resolveScriptPath` uses) AND that `package.json` declares the
+# correct `bin` entries (the npm-install path).
+hr
+echo "pi-telegram-tts-smoke-test: stage 14/14 — bundled scripts exist (v0.2.0)"
+
+# Dev path: tts-{minimax,openai}.mjs must exist in the same dir as
+# synth.ts (i.e. the package source dir).
+for script in tts-minimax.mjs tts-openai.mjs; do
+  if [[ ! -f "$PKG_DIR/$script" ]]; then
+    fail "bundled script missing: $PKG_DIR/$script"
+    exit 14
+  fi
+done
+ok "tts-minimax.mjs and tts-openai.mjs exist in $PKG_DIR"
+
+# npm-install path: package.json's `bin` field must declare both
+# entries (so `tts-minimax` / `tts-openai` resolve on PATH after
+# `npm install`).
+NODE_CODE='
+const pkg = require(process.env.PKG_DIR + "/package.json");
+const bin = pkg.bin;
+if (!bin || bin["tts-minimax"] !== "./tts-minimax.mjs" || bin["tts-openai"] !== "./tts-openai.mjs") {
+  console.error("bin field wrong:", JSON.stringify(bin));
+  process.exit(1);
+}
+console.log("bin:", JSON.stringify(bin));
+'
+
+if PKG_DIR="$PKG_DIR" node -e "$NODE_CODE"; then
+  ok "package.json bin field exposes tts-minimax and tts-openai"
+else
+  fail "package.json bin field is wrong"
+  exit 14
 fi
 
 # ---------------------------------------------------------------------------

@@ -115,11 +115,11 @@ jobs:
           # version enforcer.
           # v0.8.0/v0.2.0 consolidation: 4 → 2 active packages.
           # - pi-openai-stt was subsumed into pi-telegram-stt (v0.8.0).
-          # - pi-voice-telegram-scripts will be merged into
-          #   pi-telegram-tts in v0.2.0 (still active until then).
+          # - pi-voice-telegram-scripts was subsumed into
+          #   pi-telegram-tts in v0.2.0.
           # - pi-voice-telegram is deprecated (Phase 1).
           echo "Publishing the active sister packages at their current versions:"
-          for pkg in pi-voice-telegram-scripts pi-telegram-stt pi-telegram-tts; do
+          for pkg in pi-telegram-stt pi-telegram-tts; do
             ver=$(node -p "require('./extensions/${pkg}/package.json').version")
             echo "  ${pkg}@${ver}"
           done
@@ -127,7 +127,7 @@ jobs:
       - name: Validate every package.json has a valid semver version
         run: |
           failed=0
-          for pkg in pi-voice-telegram-scripts pi-telegram-stt pi-telegram-tts; do
+          for pkg in pi-telegram-stt pi-telegram-tts; do
             ver=$(node -p "require('./extensions/${pkg}/package.json').version")
             if [[ ! "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$ ]]; then
               echo "::error::${pkg} has invalid version: ${ver}"
@@ -138,27 +138,6 @@ jobs:
             echo "::error::One or more packages have invalid semver. Run \`cd extensions/<pkg> && npm version <X.Y.Z>\` for each."
             exit 1
           fi
-
-      - name: Publish pi-voice-telegram-scripts (will be subsumed into pi-telegram-tts@0.2.0+)
-        run: |
-          cd extensions/pi-voice-telegram-scripts
-          ver=$(node -p "require('./package.json').version")
-          # Skip if this version is already on npm. Lets the workflow
-          # re-run cleanly when a partial publish happens (e.g., a
-          # later package fails its EOTP and only the rest need to
-          # catch up after the trusted publisher is set up).
-          if npm view "pi-voice-telegram-scripts@${ver}" version >/dev/null 2>&1; then
-            echo "::notice::pi-voice-telegram-scripts@${ver} already on npm, skipping"
-          else
-            # OIDC trusted publishing takes precedence when configured
-            # per-package on npmjs.com. NODE_AUTH_TOKEN is the fallback
-            # for the very first publish (and the operator's bootstrap
-            # token if NPM_TOKEN is set as a repo secret). After trusted
-            # publishing is set up, NPM_TOKEN is ignored.
-            npm publish --provenance --access public
-          fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-telegram-stt (anchor)
         run: |

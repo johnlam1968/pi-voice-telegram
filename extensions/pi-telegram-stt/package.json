@@ -1,7 +1,7 @@
 {
   "name": "pi-telegram-stt",
-  "version": "0.8.0",
-  "description": "STT orchestrator + bundled OpenAI-compatible STT provider for the Pi coding agent + @llblab/pi-telegram bridge. Wraps the inbound voice/audio pipeline (downloads voice notes, runs STT via the in-package OpenAI client, sends a 🎙️ echo to the user, and feeds the transcript into the agent prompt). v0.8.0: subsumes the pi-openai-stt provider — the OpenAI-compatible STT client (POST /v1/audio/transcriptions with fallback-chain base_url support) now lives inside this package; the separate `pi-openai-stt` npm package is deprecated. The SttProvider interface stays as a private in-package seam (./stt-provider.ts) for future backends; the only registered provider is `pi-openai-stt` (default; selected via extensions.pi-telegram-stt.stt_provider). The 🎙️ echo is one feature of this package, not its purpose — the package name is the scope (STT orchestration), not a single feature. v0.7.0: bundled _logger.ts (was shared at extensions/_logger.ts in the source repo; now per-package so this npm package is self-contained and installable via plain `npm install` from the registry).",
+  "version": "0.8.1",
+  "description": "STT orchestrator + bundled OpenAI-compatible STT provider for the Pi coding agent + @llblab/pi-telegram bridge. Wraps the inbound voice/audio pipeline (downloads voice notes, runs STT via the in-package OpenAI client, sends a \ud83c\udf99\ufe0f echo to the user, and feeds the transcript into the agent prompt). v0.8.0: subsumes the pi-openai-stt provider \u2014 the OpenAI-compatible STT client (POST /v1/audio/transcriptions with fallback-chain base_url support) now lives inside this package; the separate `pi-openai-stt` npm package is deprecated. The SttProvider interface stays as a private in-package seam (./stt-provider.ts) for future backends; the only registered provider is `pi-openai-stt` (default; selected via extensions.pi-telegram-stt.stt_provider). The \ud83c\udf99\ufe0f echo is one feature of this package, not its purpose \u2014 the package name is the scope (STT orchestration), not a single feature. v0.7.0: bundled _logger.ts (was shared at extensions/_logger.ts in the source repo; now per-package so this npm package is self-contained and installable via plain `npm install` from the registry).",
   "type": "module",
   "license": "MIT",
   "main": "./index.ts",
@@ -38,6 +38,8 @@
     "access": "public"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   }
 }

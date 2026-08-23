@@ -1,42 +1,48 @@
 {
-	"name": "pi-telegram-tts",
-	"version": "0.1.2",
-	"description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. Registers a synthesis provider against the bridge's public voice API so voice.sendTranscript and getVoicePromptContribution both work (the v0.19.0 outboundHandlers[0].template path silently drops the transcript). Spawns the same tts-{minimax,openai}.mjs scripts the operator's template already uses — no new HTTP client, no native deps, no new abstraction layer. v0.1.0 ships the provider only; section UI (v0.2.0), per-provider config schema (v0.3.0), and UI-driven config (v0.4.0) are deferred.",
-	"type": "module",
-	"license": "MIT",
-	"main": "./index.ts",
-	"types": "./index.ts",
-	"exports": {
-		".": {
-			"types": "./index.ts",
-			"import": "./index.ts",
-			"default": "./index.ts"
-		}
-	},
-	"files": [
-		"*.ts",
-		"README.md"
-	],
-	"peerDependencies": {
-		"@earendil-works/pi-coding-agent": "*",
-		"@llblab/pi-telegram": "*",
-		"pi-voice-telegram-scripts": "*"
-	},
-	"engines": {
-		"node": ">=22.6.0"
-	},
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/johnlam1968/pi-voice-telegram.git",
-		"directory": "extensions/pi-telegram-tts"
-	},
-	"bugs": {
-		"url": "https://github.com/johnlam1968/pi-voice-telegram/issues"
-	},
-	"publishConfig": {
-		"access": "public"
-	},
-	"pi": {
-		"extensions": ["./index.ts"]
-	}
+  "name": "pi-telegram-tts",
+  "version": "0.2.0",
+  "description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. Registers a synthesis provider against the bridge's public voice API so voice.sendTranscript and getVoicePromptContribution both work (the v0.19.0 outboundHandlers[0].template path silently drops the transcript). v0.2.0 subsumes the pi-voice-telegram-scripts package — the tts-{minimax,openai}.mjs scripts are now bundled here and exposed via the package's bin field (tts-minimax, tts-openai on PATH after `npm install`). Same scripts, same auth resolution, same ffmpeg output; the only delta vs the v0.1.0 provider is the bundled scripts.",
+  "type": "module",
+  "license": "MIT",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "bin": {
+    "tts-minimax": "./tts-minimax.mjs",
+    "tts-openai": "./tts-openai.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "import": "./index.ts",
+      "default": "./index.ts"
+    }
+  },
+  "files": [
+    "*.ts",
+    "*.mjs",
+    "README.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@llblab/pi-telegram": "*"
+  },
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/johnlam1968/pi-voice-telegram.git",
+    "directory": "extensions/pi-telegram-tts"
+  },
+  "bugs": {
+    "url": "https://github.com/johnlam1968/pi-voice-telegram/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
 }

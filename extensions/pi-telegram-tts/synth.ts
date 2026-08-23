@@ -36,21 +36,26 @@ const FFMPEG_TIMEOUT_MS = 30_000;
 /**
  * Resolve the path to `tts-{provider}.mjs`.
  *
- * 1. Dev: `<repo>/extensions/pi-voice-telegram-scripts/tts-<provider>.mjs`
- *    (walks up from this file's source location; works regardless of
- *    where the operator cloned the repo).
- * 2. npm install: the `pi-voice-telegram-scripts` package's `bin`
- *    field exposes the same scripts as `tts-<provider>` on PATH. We
- *    hand the resolved name to `node` (Node's PATH lookup is built in).
+ * v0.2.0: the scripts were merged into `pi-telegram-tts` (previously
+ * a separate `pi-voice-telegram-scripts` package). The dev path
+ * looks in the same dir as this file; the npm-install path is the
+ * `bin` field of this package, which exposes `tts-minimax` /
+ * `tts-openai` on PATH after `npm install`.
+ *
+ * 1. Dev: same dir as this file → `tts-<provider>.mjs` (works
+ *    regardless of where the operator cloned the repo).
+ * 2. npm install: the `pi-telegram-tts` package's `bin` field
+ *    exposes the same scripts as `tts-<provider>` on PATH. We hand
+ *    the resolved name to `node` (Node's PATH lookup is built in).
  */
 function resolveScriptPath(provider: "minimax" | "openai"): string {
-	// Dev: same dir as the scripts package. This file is at
-	// extensions/pi-telegram-tts/synth.ts; walk up to extensions/, then
-	// into pi-voice-telegram-scripts/.
+	// Dev: same dir as synth.ts (this file). The scripts moved into
+	// `pi-telegram-tts` in v0.2.0; previously they lived at
+	// `../pi-voice-telegram-scripts/tts-<provider>.mjs` (the v0.1.x
+	// walk-up). After the v0.2.0 merge, the dev path is just the
+	// basename.
 	const devPath = join(
 		dirname(new URL(import.meta.url).pathname),
-		"..",
-		"pi-voice-telegram-scripts",
 		`tts-${provider}.mjs`,
 	);
 	if (existsSync(devPath)) return devPath;
