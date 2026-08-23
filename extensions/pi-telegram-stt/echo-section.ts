@@ -8,7 +8,7 @@
  * token and stale the in-Telegram menu buttons.
  *
  * The section exposes two operator-facing knobs:
- *   1. `echoEnabled` — toggle the 🎙️ echo on/off.
+ *   1. `showTranscript` — toggle the 🎙️ "show transcript" reply on/off.
  *   2. `stt_provider` — pick from the installed providers
  *      (registered in the in-process registry by the provider
  *      extensions on their own `session_start`).
@@ -30,14 +30,14 @@ export function registerEchoSection(): () => void {
 		order: 10,
 		getLabel: () => {
 			const cfg = loadEchoConfig();
-			return `${cfg.echoEnabled ? "🟢" : "⚫️"} Echo · ${cfg.stt_provider}`;
+			return `${cfg.showTranscript ? "🟢" : "⚫️"} Echo · ${cfg.stt_provider}`;
 		},
 
 		render: async () => {
 			const cfg = loadEchoConfig();
 			return {
 				text: `<b>🎙️ Echo</b>\n\n${
-					cfg.echoEnabled
+					cfg.showTranscript
 						? "Status: 🟢 on — voice/audio messages get a 🎙️ reply with the STT transcript."
 						: "Status: ⚫️ off — voice/audio messages are not echoed (transcript still reaches the agent)."
 				}\n\nEdit settings in /telegram-settings → 🎙️ Echo.`,
@@ -61,7 +61,7 @@ export function registerEchoSection(): () => void {
 			order: 10,
 			getLabel: () => {
 				const cfg = loadEchoConfig();
-				return `${cfg.echoEnabled ? "🟢" : "⚫️"} Echo · ${cfg.stt_provider}`;
+				return `${cfg.showTranscript ? "🟢" : "⚫️"} Echo · ${cfg.stt_provider}`;
 			},
 
 			open: async (ctx: TelegramSectionContext) => {
@@ -80,10 +80,10 @@ export function registerEchoSection(): () => void {
 
 				if (action === "toggle-echo") {
 					const updated = loadEchoConfig();
-					updated.echoEnabled = !updated.echoEnabled;
+					updated.showTranscript = !updated.showTranscript;
 					saveEchoConfig(updated);
 					await ctx.answerCallback(
-						`Echo is now ${updated.echoEnabled ? "ON" : "OFF"}.`,
+						`Echo is now ${updated.showTranscript ? "ON" : "OFF"}.`,
 					);
 					return "handled";
 				}
@@ -113,7 +113,7 @@ export function registerEchoSection(): () => void {
 	});
 }
 
-function renderSettingsText(cfg: { echoEnabled: boolean; stt_provider: string }): string {
+function renderSettingsText(cfg: { showTranscript: boolean; stt_provider: string }): string {
 	const providers = listSttProviders();
 	const providerLines = providers.length === 0
 		? "<i>(no providers installed — install e.g. pi-openai-stt and reload)</i>"
@@ -126,7 +126,7 @@ function renderSettingsText(cfg: { echoEnabled: boolean; stt_provider: string })
 	return [
 		"<b>🎙️ Echo settings</b>",
 		"",
-		`Echo: <b>${cfg.echoEnabled ? "🟢 on" : "⚫️ off"}</b>`,
+		`Show transcript: <b>${cfg.showTranscript ? "🟢 on" : "⚫️ off"}</b>`,
 		`STT provider: <code>${cfg.stt_provider}</code>`,
 		"",
 		"<b>Installed STT providers:</b>",
@@ -142,13 +142,13 @@ function renderSettingsText(cfg: { echoEnabled: boolean; stt_provider: string })
  *  the real token. */
 function renderSettingsKeyboard(
 	ctx: TelegramSectionContext,
-	cfg: { echoEnabled: boolean; stt_provider: string },
+	cfg: { showTranscript: boolean; stt_provider: string },
 ): Array<Array<{ text: string; callback_data: string }>> {
 	const providers = listSttProviders();
 	const rows: Array<Array<{ text: string; callback_data: string }>> = [
 		[
 			{
-				text: cfg.echoEnabled ? "Turn echo OFF" : "Turn echo ON",
+				text: cfg.showTranscript ? "Turn echo OFF" : "Turn echo ON",
 				callback_data: ctx.callbackData("toggle-echo"),
 			},
 		],

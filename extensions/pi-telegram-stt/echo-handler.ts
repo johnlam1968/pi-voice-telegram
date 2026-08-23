@@ -14,7 +14,7 @@
  *      the configured STT provider in the registry (v0.3.0+,
  *      previously hardcoded to whisper-server), calls
  *      `provider.transcribe()`, and sends the 🎙️ reply to the
- *      user (when `echoEnabled`). Returns the transcript for the
+ *      user (when `showTranscript`). Returns the transcript for the
  *      bridge to include in the agent's user message.
  *
  * The provider is looked up at STT call time (not at registration
@@ -135,14 +135,14 @@ export async function handleTelegramUpdateForEcho(
 
 /** The voice transcription provider. Looks up the configured STT
  *  provider in the registry at call time, runs the transcription,
- *  sends the 🎙️ echo (when `echoEnabled`), and returns the
- *  transcript for the bridge to include in the user message.
- *  Returns `undefined` on any failure so the next provider in
- *  the chain can try. */
+ *  sends the 🎙️ "show transcript" reply (when `showTranscript`),
+ *  and returns the transcript for the bridge to include in the
+ *  user message. Returns `undefined` on any failure so the next
+ *  provider in the chain can try. */
 async function transcribeAndMaybeEcho(
 	file: TelegramVoiceTranscriptionFile,
 	options: { language?: string } | undefined,
-	echoEnabled: boolean,
+	showTranscript: boolean,
 	sttProviderId: string,
 ): Promise<TelegramVoiceTranscriptionProviderResult> {
 	if (!file.path) return undefined;
@@ -198,10 +198,10 @@ async function transcribeAndMaybeEcho(
 	}
 	log.info("transcribe ok", { provider: provider.id, chars: transcript.length });
 
-	// Best-effort 🎙️ echo. Failure here does NOT fail the
-	// transcription — the agent still gets the transcript via the
-	// return value.
-	if (echoEnabled) {
+	// Best-effort "show transcript" reply. Failure here does NOT
+	// fail the transcription — the agent still gets the
+	// transcript via the return value.
+	if (showTranscript) {
 		const chatId = chatIdByFileName.get(file.fileName);
 		if (chatId !== undefined) {
 			try {
@@ -224,10 +224,10 @@ async function transcribeAndMaybeEcho(
 				chatIdByFileName.delete(file.fileName);
 			}
 		} else {
-			log.warn("echo enabled but no chatId stashed", { file: file.fileName });
+			log.warn("showTranscript enabled but no chatId stashed", { file: file.fileName });
 		}
 	} else {
-		log.debug("echo disabled, skipping", { file: file.fileName });
+		log.debug("showTranscript disabled, skipping", { file: file.fileName });
 	}
 
 	return options?.language
@@ -236,7 +236,7 @@ async function transcribeAndMaybeEcho(
 }
 
 /** Canonical entry point. Exported for tests; the runtime path is
- *  through `registerEchoHandlers` so `cfg.echoEnabled` and
+ *  through `registerEchoHandlers` so `cfg.showTranscript` and
  *  `cfg.stt_provider` are captured in the closure. */
 export function handleTelegramVoiceTranscription(
 	file: TelegramVoiceTranscriptionFile,
@@ -250,11 +250,11 @@ export function handleTelegramVoiceTranscription(
  *  session_shutdown.
  *
  *  The provider is ALWAYS registered (so the agent always gets
- *  the transcript as text). The 🎙️ echo is gated on
- *  `cfg.echoEnabled`. The STT provider is looked up at call time
- *  via `cfg.stt_provider` (the registry may not have the provider
- *  yet at registration time). Hot-reload re-creates the closure
- *  with the new `cfg.echoEnabled` + `cfg.stt_provider`. */
+ *  the transcript as text). The 🎙️ "show transcript" reply is
+ *  gated on `cfg.showTranscript`. The STT provider is looked up
+ *  at call time via `cfg.stt_provider` (the registry may not have
+ *  the provider yet at registration time). Hot-reload re-creates
+ *  the closure with the new `cfg.showTranscript` + `cfg.stt_provider`. */
 export function registerEchoHandlers(cfg: EchoConfig): Array<() => void> {
 	const disposers: Array<() => void> = [];
 
@@ -267,7 +267,7 @@ export function registerEchoHandlers(cfg: EchoConfig): Array<() => void> {
 				transcribeAndMaybeEcho(
 					file,
 					options,
-					cfg.echoEnabled,
+					cfg.showTranscript,
 					cfg.stt_provider,
 				),
 			{ id: "pi-telegram-stt/stt" },

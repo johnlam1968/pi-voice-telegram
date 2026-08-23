@@ -34,7 +34,7 @@ Edit `~/.pi/agent/telegram.json`:
 {
   "extensions": {
     "pi-telegram-stt": {
-      "echoEnabled": true,
+      "showTranscript": true,
       "stt_provider": "pi-openai-stt"
     },
     "pi-openai-stt": {
@@ -43,6 +43,13 @@ Edit `~/.pi/agent/telegram.json`:
   }
 }
 ```
+
+> **v0.7.2 rename:** the field was renamed from `echoEnabled` to
+> `showTranscript` (semantic symmetry with the bridge's
+> `voice.sendTranscript` — show the user's voice as text vs. send
+> the agent's voice as a caption). The reader still accepts
+> `echoEnabled` as a fallback; the section UI's toggle writes the
+> new key, so the config file migrates itself on first edit.
 
 `stt_provider` defaults to `"pi-openai-stt"`. `pi-openai-stt`'s `base_url` is a string (single gateway) or a string[] (fallback chain — local first, cloud second is the natural on-host shape). See [`pi-openai-stt`](../pi-openai-stt/README.md) for the full config matrix.
 

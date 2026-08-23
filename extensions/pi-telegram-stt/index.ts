@@ -3,6 +3,15 @@
  *
  * ## Version history
  *
+ * v0.7.2 — rename `extensions["pi-telegram-stt"].echoEnabled` to
+ *         `showTranscript`. Naming symmetry with the bridge's
+ *         `voice.sendTranscript` (the outbound TTS caption flag):
+ *         both are "transcript" flags, distinguishable by direction
+ *         (in vs. out). The reader accepts the old `echoEnabled`
+ *         key as a fallback; the section UI's toggle writes the
+ *         new key, so the config file migrates itself on first
+ *         edit. No behavior change.
+ *
  * v0.5.0 — retire `pi-whisper-stt`. The default `stt_provider` in
  *         `telegram-config.ts` flips from `"pi-whisper-stt"` to
  *         `"pi-openai-stt"`. The `pi-whisper-stt` peer-dep is
@@ -193,7 +202,7 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 	 *  the new `echoEnabled` and `stt_provider`. */
 	const reconfigureHandlers = (): void => {
 		const cfg = loadEchoConfig();
-		log.info("reconfigure handlers", { echoEnabled: cfg.echoEnabled, sttProvider: cfg.stt_provider });
+		log.info("reconfigure handlers", { showTranscript: cfg.showTranscript, sttProvider: cfg.stt_provider });
 		handlerDisposers.forEach((d: () => void) => d());
 		handlerDisposers = [];
 		handlerDisposers.push(...registerEchoHandlers(cfg));
@@ -240,7 +249,7 @@ export default function piTelegramEcho(pi: ExtensionAPI): void {
 		reconfigureHandlers();
 		startConfigWatcher();
 		log.info("session_start done", {
-			echoEnabled: loadEchoConfig().echoEnabled,
+			showTranscript: loadEchoConfig().showTranscript,
 			sttProvider: loadEchoConfig().stt_provider,
 			sectionRegistered: !!sectionDisposer,
 			watcherStarted: !!configWatcher,
