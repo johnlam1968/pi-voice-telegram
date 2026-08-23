@@ -80,11 +80,6 @@ on:
     # package on npmjs.com (Package → Settings → Trusted Publishers)
     # and the workflow will use OIDC instead — NPM_TOKEN is ignored
     # once trusted publishing is set.
-    inputs:
-      deprecate_otp:
-        description: '6-digit TOTP code for the deprecate job (GAT path; required for deprecated packages that have no OIDC trusted publisher configured)'
-        required: false
-        default: ''
 
 permissions:
   contents: write   # for the GitHub Release
@@ -210,21 +205,18 @@ jobs:
   deprecate:
     # Deprecate the 3 superseded packages (the v0.8.0 / v0.2.0 consolidation).
     # Idempotent: `npm deprecate <pkg> <msg>` overwrites any prior message.
-    # ONLY runs on workflow_dispatch (with an optional OTP from the dispatch
-    # input). Tag pushes don't run this job because the deprecated packages
-    # have no OIDC trusted publisher configured (and re-adding a trusted
-    # publisher to a deprecated package on npmjs.com is a chicken-and-egg).
+    # Uses OIDC trusted publishing (the deprecated packages have trusted
+    # publishers configured on npmjs.com pointing at this workflow). Runs
+    # on every workflow_dispatch so the maintainer can re-apply the
+    # deprecation messages at any time without a new tag.
     # The deprecation messages are documented in
     # docs/CONSOLIDATION-PLAN.md Appendix B.
     name: Deprecate superseded packages
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    # No special permissions: we use the NPM_TOKEN secret + the OTP from
-    # the workflow_dispatch input. This is the GAT auth path; the GAT is
-    # owned by the maintainer, so it can deprecate any package the
-    # maintainer owns. (OIDC trusted publishing is package-scoped and
-    # therefore can't deprecate a package that has no trusted publisher
-    # configured for this workflow.)
+    permissions:
+      contents: read
+      id-token: write   # for OIDC trusted publishing on npm deprecate
     # No `environment:` block — same gating as publish (none, by default).
 
     steps:
@@ -233,36 +225,24 @@ jobs:
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-          # setup-node auto-sets NODE_AUTH_TOKEN from the OIDC exchange
-          # when registry-url is provided AND the OIDC token is available
-          # (i.e. id-token: write is granted). For this job we explicitly
-          # override with the GAT below; OIDC would only work if the
-          # deprecated package had a trusted publisher pointing at this
-          # workflow (which it doesn't, by design).
+          # OIDC trusted publishing: setup-node auto-issues a short-lived
+          # token from the OIDC exchange when registry-url is provided
+          # and id-token: write is granted. The token is auto-applied
+          # to npm commands via NODE_AUTH_TOKEN. We intentionally do NOT
+          # override it with the NPM_TOKEN secret (that GAT requires
+          # interactive 2FA for deprecate).
 
       - name: Deprecate pi-voice-telegram (old monolithic, split in v0.19.0)
-        if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-voice-telegram@0.16.12 \
             "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory."
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}
 
       - name: Deprecate pi-openai-stt (subsumed into pi-telegram-stt@0.8.0+)
-        if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-openai-stt \
             "Subsumed into pi-telegram-stt@0.8.0+. Install only pi-telegram-stt; the OpenAI-compatible STT provider is now bundled. Existing configs: move the \"pi-openai-stt\" extension block into \"pi-telegram-stt\"."
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}
 
       - name: Deprecate pi-voice-telegram-scripts (subsumed into pi-telegram-tts@0.2.0+)
-        if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-voice-telegram-scripts \
             "Subsumed into pi-telegram-tts@0.2.0+. The TTS scripts are now bundled in the package; the \"tts-minimax\" and \"tts-openai\" bin names still work on PATH. Existing operators using outboundHandlers[0].template: update the absolute path to point at extensions/pi-telegram-tts/tts-minimax.mjs (or just use the bin name)."
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}

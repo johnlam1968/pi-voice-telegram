@@ -273,16 +273,14 @@ This is a pure **deprecation** change. No code change for operators. No tag, no 
 
 What changed:
 - `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation message points operators at `pi-telegram-stt` and `pi-telegram-tts`.
-- The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml`. The job runs only on `workflow_dispatch` (with an optional `deprecate_otp` input for the GAT path) — NOT on tag pushes, because the deprecated packages have no OIDC trusted publisher configured (and adding one to a deprecated package on npmjs.com is a chicken-and-egg).
+- The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml`. The job uses OIDC trusted publishing (the deprecated package has a trusted publisher configured on npmjs.com pointing at this workflow) and runs on `workflow_dispatch`. Subsequent runs are no-ops (idempotent message re-apply).
 - `AGENTS.md` — added this v0.21.0 changelog section.
 
 How the deprecate job is triggered (operator flow):
 ```bash
-# 1. Get a 6-digit TOTP code from your authenticator app
-# 2. Trigger the workflow with the OTP
 unset GITHUB_TOKEN
-gh workflow run publish.yml -f deprecate_otp=<6-digit-code>
-# 3. Watch the run
+gh workflow run publish.yml
+# Watch the run
 gh run watch
 ```
 The job idempotently re-applies all 3 deprecation messages (pi-voice-telegram, pi-openai-stt, pi-voice-telegram-scripts). Each phase triggers this once; subsequent runs are no-ops.
