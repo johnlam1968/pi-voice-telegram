@@ -244,28 +244,25 @@ jobs:
         if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-voice-telegram@0.16.12 \
-            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory." \
-            --otp "$DEPR_OTP"
+            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DEPR_OTP: ${{ inputs.deprecate_otp }}
+          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}
 
       - name: Deprecate pi-openai-stt (subsumed into pi-telegram-stt@0.8.0+)
         if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-openai-stt \
-            "Subsumed into pi-telegram-stt@0.8.0+. Install only pi-telegram-stt; the OpenAI-compatible STT provider is now bundled. Existing configs: move the \"pi-openai-stt\" extension block into \"pi-telegram-stt\"." \
-            --otp "$DEPR_OTP"
+            "Subsumed into pi-telegram-stt@0.8.0+. Install only pi-telegram-stt; the OpenAI-compatible STT provider is now bundled. Existing configs: move the \"pi-openai-stt\" extension block into \"pi-telegram-stt\"."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DEPR_OTP: ${{ inputs.deprecate_otp }}
+          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}
 
       - name: Deprecate pi-voice-telegram-scripts (subsumed into pi-telegram-tts@0.2.0+)
         if: ${{ inputs.deprecate_otp != '' }}
         run: |
           npm deprecate pi-voice-telegram-scripts \
-            "Subsumed into pi-telegram-tts@0.2.0+. The TTS scripts are now bundled in the package; the \"tts-minimax\" and \"tts-openai\" bin names still work on PATH. Existing operators using outboundHandlers[0].template: update the absolute path to point at extensions/pi-telegram-tts/tts-minimax.mjs (or just use the bin name)." \
-            --otp "$DEPR_OTP"
+            "Subsumed into pi-telegram-tts@0.2.0+. The TTS scripts are now bundled in the package; the \"tts-minimax\" and \"tts-openai\" bin names still work on PATH. Existing operators using outboundHandlers[0].template: update the absolute path to point at extensions/pi-telegram-tts/tts-minimax.mjs (or just use the bin name)."
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          DEPR_OTP: ${{ inputs.deprecate_otp }}
+          NPM_CONFIG_OTP: ${{ inputs.deprecate_otp }}
