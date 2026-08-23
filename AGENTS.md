@@ -266,3 +266,21 @@ What this means for the operator's running pi:
 - **No change needed if `pi-telegram-tts` is not installed.** The v0.19.0 template path continues to work exactly as before; the package is opt-in.
 - **To make `sendTranscript: true` actually produce a voice caption:** install `pi-telegram-tts` (dev shim or `pi install npm:pi-telegram-tts`), set `extensions["pi-telegram-tts"]` in `telegram.json`, and either clear `outboundHandlers[0]` (provider as sole path) or leave it in place (provider as fallback for template failures; `sendTranscript` still a no-op on the template path).
 - **The `tts-*.mjs` scripts are unchanged** — same CLI args, same auth resolution, same ffmpeg output. The provider is a different dispatch, not a different implementation.
+
+## v0.21.0 changelog (the consolidation, phase 1)
+
+This is a pure **deprecation** change. No code change for operators. No tag, no commit against the 4 active packages.
+
+What changed:
+- `pi-voice-telegram@0.16.12` is now deprecated on the npm registry. The deprecation message points operators at `pi-telegram-stt` and `pi-telegram-tts`. The deprecation is applied via the `deprecate` job in `.github/workflows/publish.yml` (idempotent OIDC re-apply on every tag push, and on `workflow_dispatch` for the Phase 1 manual trigger).
+- `AGENTS.md` — added this v0.21.0 changelog section.
+
+What this means for the operator's running pi:
+- **No change needed.** The shim at `~/.pi/agent/extensions/pi-telegram-stt.ts` still works. The `telegram.json#outboundHandlers[0].template` still works. The 3 active sister extensions are unchanged.
+- **`npm install pi-voice-telegram@0.16.12` will now print a deprecation warning.** Existing installs continue to work — the deprecation is purely a heads-up for new installs.
+
+What comes next (the remaining 2 phases of the consolidation):
+- **v0.22.0 (Phase 2)**: subsume `pi-openai-stt` into `pi-telegram-stt` → 2 active packages, deprecate `pi-openai-stt`.
+- **v0.23.0 (Phase 3)**: merge `pi-voice-telegram-scripts` into `pi-telegram-tts` → `tts-minimax` / `tts-openai` exposed via the package's `bin` field, deprecate `pi-voice-telegram-scripts`.
+
+See `docs/CONSOLIDATION-PLAN.md` for the full plan, the file-by-file change list (Appendix C), and the exact deprecation messages (Appendix B).

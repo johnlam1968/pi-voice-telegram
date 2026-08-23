@@ -1,4 +1,6 @@
-# publish.yml — publish the 3 sister packages to the npm registry.
+# publish.yml — publish the active sister packages to the npm registry,
+# and deprecate the 3 superseded packages (the v0.8.0 / v0.2.0
+# consolidation).
 #
 # Why this exists: as of npm v12, GATs (granular access tokens) with
 # the "bypass 2FA" permission can no longer publish directly. They
@@ -7,6 +9,12 @@
 # OIDC Trusted Publishing: GitHub Actions issues a short-lived
 # token to npm on each run, no stored secret, no 2FA prompt
 # needed. The OIDC handshake is itself the second factor.
+#
+# The deprecate job applies the same OIDC auth to `npm deprecate`,
+# so the host doesn't need a local npm login to deprecate the 3
+# superseded packages. The messages are idempotent — re-applying
+# them is a no-op. See docs/CONSOLIDATION-PLAN.md Appendix B for
+# the exact messages.
 #
 # Trigger:
 #   - Push of a tag matching v* (the normal flow):
@@ -193,3 +201,42 @@ jobs:
           # No body — let the auto-generated release notes do the talking.
           # Future enhancement: include a list of the 3 published packages
           # with their install commands for end users.
+
+  deprecate:
+    # Deprecate the 3 superseded packages (the v0.8.0 / v0.2.0 consolidation).
+    # Idempotent: `npm deprecate <pkg> <msg>` overwrites any prior message.
+    # Runs after publish on tag pushes, and on workflow_dispatch for the
+    # Phase 1 manual trigger (deprecate pi-voice-telegram before any tag
+    # exists). The deprecation messages are documented in
+    # docs/CONSOLIDATION-PLAN.md Appendix B.
+    name: Deprecate superseded packages
+    runs-on: ubuntu-latest
+    # No `environment:` block — same gating as publish (none, by default).
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Deprecate pi-voice-telegram (old monolithic, split in v0.19.0)
+        run: |
+          npm deprecate pi-voice-telegram@0.16.12 \
+            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Deprecate pi-openai-stt (subsumed into pi-telegram-stt@0.8.0+)
+        run: |
+          npm deprecate pi-openai-stt \
+            "Subsumed into pi-telegram-stt@0.8.0+. Install only pi-telegram-stt; the OpenAI-compatible STT provider is now bundled. Existing configs: move the \"pi-openai-stt\" extension block into \"pi-telegram-stt\"."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Deprecate pi-voice-telegram-scripts (subsumed into pi-telegram-tts@0.2.0+)
+        run: |
+          npm deprecate pi-voice-telegram-scripts \
+            "Subsumed into pi-telegram-tts@0.2.0+. The TTS scripts are now bundled in the package; the \"tts-minimax\" and \"tts-openai\" bin names still work on PATH. Existing operators using outboundHandlers[0].template: update the absolute path to point at extensions/pi-telegram-tts/tts-minimax.mjs (or just use the bin name)."
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
