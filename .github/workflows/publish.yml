@@ -235,7 +235,7 @@ jobs:
       - name: Deprecate pi-voice-telegram (old monolithic, split in v0.19.0)
         run: |
           npm deprecate pi-voice-telegram@0.16.12 \
-            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory." --loglevel=verbose 2>&1 | tail -40
+            "Deprecated by the v0.19.0 split. Install pi-telegram-stt and pi-telegram-tts instead. The monolithic package has been split into the sister extensions in the repo's extensions/ directory."
 
       - name: Deprecate pi-openai-stt (subsumed into pi-telegram-stt@0.8.0+)
         run: |
