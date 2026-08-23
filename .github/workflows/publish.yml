@@ -130,33 +130,57 @@ jobs:
       - name: Publish pi-voice-telegram-scripts (leaves first, no peer deps)
         run: |
           cd extensions/pi-voice-telegram-scripts
-          # OIDC trusted publishing takes precedence when configured
-          # per-package on npmjs.com. NODE_AUTH_TOKEN is the fallback
-          # for the very first publish (and the operator's bootstrap
-          # token if NPM_TOKEN is set as a repo secret). After trusted
-          # publishing is set up, NPM_TOKEN is ignored.
-          npm publish --provenance --access public
+          ver=$(node -p "require('./package.json').version")
+          # Skip if this version is already on npm. Lets the workflow
+          # re-run cleanly when a partial publish happens (e.g., a
+          # later package fails its EOTP and only the rest need to
+          # catch up after the trusted publisher is set up).
+          if npm view "pi-voice-telegram-scripts@${ver}" version >/dev/null 2>&1; then
+            echo "::notice::pi-voice-telegram-scripts@${ver} already on npm, skipping"
+          else
+            # OIDC trusted publishing takes precedence when configured
+            # per-package on npmjs.com. NODE_AUTH_TOKEN is the fallback
+            # for the very first publish (and the operator's bootstrap
+            # token if NPM_TOKEN is set as a repo secret). After trusted
+            # publishing is set up, NPM_TOKEN is ignored.
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-openai-stt
         run: |
           cd extensions/pi-openai-stt
-          npm publish --provenance --access public
+          ver=$(node -p "require('./package.json').version")
+          if npm view "pi-openai-stt@${ver}" version >/dev/null 2>&1; then
+            echo "::notice::pi-openai-stt@${ver} already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-telegram-stt (anchor)
         run: |
           cd extensions/pi-telegram-stt
-          npm publish --provenance --access public
+          ver=$(node -p "require('./package.json').version")
+          if npm view "pi-telegram-stt@${ver}" version >/dev/null 2>&1; then
+            echo "::notice::pi-telegram-stt@${ver} already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish pi-telegram-tts (TTS synthesis provider, v0.1.0+)
         run: |
           cd extensions/pi-telegram-tts
-          npm publish --provenance --access public
+          ver=$(node -p "require('./package.json').version")
+          if npm view "pi-telegram-tts@${ver}" version >/dev/null 2>&1; then
+            echo "::notice::pi-telegram-tts@${ver} already on npm, skipping"
+          else
+            npm publish --provenance --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
