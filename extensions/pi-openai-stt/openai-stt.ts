@@ -71,9 +71,9 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import { readFile } from "node:fs/promises";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { makeLogger } from "./_logger.js";
 
@@ -143,10 +143,11 @@ export class OpenAiSttError extends Error {
  *  rest of the bridge's config conventions. Env vars still win for
  *  one-off overrides (CI, container runs).
  *
- *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
- *  `pi-telegram-stt`'s `getAgentDir()` pattern). */
+ *  `PI_CODING_AGENT_DIR` is honored via the upstream
+ *  `getAgentDir()` helper (matches the bridge and the
+ *  `pi-telegram-stt`'s `telegram-config.ts` pattern). */
 function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: string } {
-	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const dir = getAgentDir();
 	const configPath = join(dir, "telegram.json");
 	if (!existsSync(configPath)) return {};
 	try {
@@ -184,10 +185,11 @@ function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: st
  *  set — the on-host path "just works" if the operator already has
  *  the key in `auth.json` (which the LLM provider also reads).
  *
- *  `PI_CODING_AGENT_DIR` is honored (matches the bridge and the
- *  `pi-telegram-stt`'s `getAgentDir()` pattern). */
+ *  `PI_CODING_AGENT_DIR` is honored via the upstream
+ *  `getAgentDir()` helper (matches the bridge and the
+ *  `pi-telegram-stt`'s `telegram-config.ts` pattern). */
 function readOpenAiKeyFromAuthJson(): string | undefined {
-	const dir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
+	const dir = getAgentDir();
 	const authPath = join(dir, "auth.json");
 	if (!existsSync(authPath)) return undefined;
 	try {
