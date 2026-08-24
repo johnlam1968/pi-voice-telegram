@@ -414,3 +414,88 @@ EDIT: docs/PI-TELEGRAM-TTS-PLAN.md              (drop scripts peer dep mention)
 COMMIT + TAG: v0.8.1
 PUSH: git push --follow-tags
 ```
+
+---
+
+## Session execution summary (2026-08-23)
+
+This plan was executed in a single session on 2026-08-23. The end state matches the plan's target.
+
+### Execution log (chronological)
+
+1. **Pre-flight (16:00 EDT)**: Confirmed the v0.7.2 state was healthy. All 13 stages of `pi-telegram-tts-smoke-test.sh` (in `--no-network` mode) green. The v0.7.2-era publish workflow's OIDC re-run was healthy.
+
+2. **Phase 1 — Deprecate `pi-voice-telegram@0.16.12`** (~30 min real-time, including the auth-path investigation): Started with `npm deprecate` CLI attempts. All 3 CLI auth paths failed:
+   - OIDC trusted publishing only covers `npm publish` / `npm stage publish`, NOT `npm deprecate`. Returns E404.
+   - GAT (NPM_TOKEN) requires interactive 2FA. TOTP-via-CI attempts (`NPM_CONFIG_OTP`, `--otp`) were both rejected with EOTP ("typoed it, or it timed out").
+   - Local `npm login` isn't set up on the host.
+
+   **Pivoted to the npm web UI's "Deprecate package" button** (the maintainer's browser session bypasses 2FA). The deprecation applied with npm's generic default message ("Package no longer supported..."), not the Appendix B text. The maintainer accepted this as a documented gap.
+
+3. **Phase 2 — Subsume `pi-openai-stt` into `pi-telegram-stt@0.8.0`** (~1 hour): The big phase. Code move + flat config (`base_url` / `apiKey` in `EchoConfig`) + module-load provider registration + new 6-stage smoke test + delete the old `extensions/pi-openai-stt/` + deprecate `pi-openai-stt@0.3.2` via the npm web UI. **Encountered 2 release-blockers that needed commits**:
+   - The publish workflow still tried to read 4 packages (the `Print current versions` step errored on the missing `pi-openai-stt` directory). **Fix**: drop `pi-openai-stt` from the workflow's `for` loop. New commit + tag re-push.
+   - The tag was on the previous commit; the re-run used the old code. **Fix**: delete the old tag, re-tag on the new commit, push.
+
+   Result: `pi-telegram-stt@0.8.0` published to npm. `pi-telegram-stt@0.8.1` re-bumped (no-content) to keep the publish workflow happy. `pi-telegram-tts@0.1.3` re-bumped (no-content) for the same reason.
+
+4. **Phase 3 — Merge `pi-voice-telegram-scripts` into `pi-telegram-tts@0.2.0`** (~30 min): The smaller phase. Code move + bin field + simplified `resolveScriptPath` + new smoke stage 14 + delete the old `extensions/pi-voice-telegram-scripts/` + deprecate `pi-voice-telegram-scripts@0.1.2` via the npm web UI. Same release-blocker fix for the workflow (drop `pi-voice-telegram-scripts` from the publish loop). Result: `pi-telegram-tts@0.2.0` published to npm.
+
+5. **Phase 4 — Live test on the host**: The user restarted `pi` to load the new source. Updated `~/.pi/agent/telegram.json` to the new flat v0.8.0 shape; removed the `pi-openai-stt.ts` shim. The first live test attempt (at 19:52:32 EDT) failed with `every voice synthesis provider failed` (transient first-run issue, likely a race condition during the new pi's first session). Subsequent attempts (19:54, 19:58, 19:59) succeeded — 4+ voice messages received, 3+ TTS OGG outputs created. **Smoke tests had already verified the new code end-to-end** before the live test (6/6 + 14/14 stages green, including live round-trip stages).
+
+6. **Phase 5 — Documentation** (~30 min): Added v0.21.0, v0.22.0, v0.23.0 changelogs to AGENTS.md. Updated both extension READMEs (flat config + migration sections for `pi-telegram-stt`; bundled scripts + migration section for `pi-telegram-tts`). Updated `docs/PI-TELEGRAM-TTS-PLAN.md` (Progress table: 2 new SHIPPED rows). Updated `docs/UPSTREAM-API-COMPLIANCE.md` (Scope table + module-load pattern + path-resolution consistency).
+
+7. **Phase 6 — Verifier**: Dispatched a verifier agent via `task(agent_name="verifier")`. The verifier returned **PARTIAL** (5 non-blocking gaps; the most critical was that `pi-voice-telegram-scripts` was NOT yet deprecated on npm — the earlier web UI click didn't land; and `extensions/pi-telegram-tts/README.md` had a stale "Also install `pi-voice-telegram-scripts`" section). All gaps fixed post-verifier: the user re-clicked the web UI deprecate (now landed); the README was rewritten; the v0.23.0 changelog section was added (the forward-looking bullet was there but the actual section was missing).
+
+8. **Upstream issue**: Filed [llblab/pi-telegram#235](https://github.com/llblab/pi-telegram/issues/235) for the `voice.sendTranscript` UI gap (pre-existing bridge gap surfaced during the live test). The user instructed to hold off on implementing a workaround in our two extensions; the right fix is in the bridge.
+
+### Final npm state
+
+| Package | Version | Status | Deprecation message |
+|---|---|---|---|
+| `pi-telegram-stt` | 0.8.1 | ✅ active | — |
+| `pi-telegram-tts` | 0.2.0 | ✅ active | — |
+| `pi-voice-telegram` | 0.16.12 | ⚠️ deprecated | "Package no longer supported..." (npm default) |
+| `pi-openai-stt` | 0.3.2 | ⚠️ deprecated | "Package no longer supported..." (npm default) |
+| `pi-voice-telegram-scripts` | 0.1.2 | ⚠️ deprecated | "Package no longer supported..." (npm default) |
+
+### Final repo state
+
+```
+extensions/
+├── pi-telegram-stt/        # STT orchestrator + bundled OpenAI-compatible STT provider
+│   ├── index.ts             # registers the bundled OpenAI provider at module load
+│   ├── openai-stt.ts        # ← moved from pi-openai-stt/ in v0.8.0
+│   ├── stt-provider.ts      # in-package SttProvider interface (private seam)
+│   ├── telegram-config.ts   # EchoConfig: showTranscript + stt_provider + base_url + apiKey (flat v0.8.0)
+│   ├── echo-handler.ts
+│   ├── echo-section.ts
+│   ├── _logger.ts
+│   ├── package.json         # 0.8.1, no pi-openai-stt peer dep
+│   └── README.md            # Migration from 0.7.2
+└── pi-telegram-tts/         # TTS synthesis provider + bundled tts-*.mjs scripts
+    ├── index.ts             # registers the bundled synthesis provider at module load
+    ├── synth.ts             # resolveScriptPath: same dir (dev) / PATH (npm install)
+    ├── telegram-config.ts
+    ├── tts-minimax.mjs      # ← moved from pi-voice-telegram-scripts/ in v0.2.0
+    ├── tts-openai.mjs       # ← moved from pi-voice-telegram-scripts/ in v0.2.0
+    ├── _logger.ts
+    ├── package.json         # 0.2.0, bin field exposes tts-minimax / tts-openai
+    └── README.md            # Migration from 0.1.2
+
+scripts/
+├── pi-telegram-stt-smoke-test.sh   # NEW in v0.8.0 — 6 stages
+├── pi-telegram-tts-smoke-test.sh   # 14 stages (was 13; stage 14 added in v0.2.0)
+├── dev-status.sh
+├── dev-watch.sh
+├── mmx-tts-smoke-test.sh           # pre-existing broken path (tracked separately)
+└── publish.sh
+
+.github/workflows/
+└── publish.yml             # 2 publish steps (pi-telegram-stt, pi-telegram-tts); no deprecate job
+```
+
+### Tags
+
+- `v0.8.0` — first publish of `pi-telegram-stt@0.8.0`
+- `v0.8.1` — first publish of `pi-telegram-tts@0.2.0` (with the no-content `pi-telegram-stt@0.8.1` re-bump)
+
