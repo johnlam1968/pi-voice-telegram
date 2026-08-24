@@ -344,7 +344,6 @@ else
 
   cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
-  "voice": { "sendTranscript": true },
   "extensions": {
     "pi-telegram-tts": {
       "provider": "$PROVIDER",
@@ -366,26 +365,30 @@ const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault:
 // Reach the synth module directly so we can pass an explicit cfg and
 // a real text input. The provider closure in the registry is fine
 // too, but a direct call is more transparent for a smoke test.
+//
+// v0.4.0: synthesizeOgg signature is now (text, options, cfg) and
+// returns Promise<string | undefined> (just the OGG path). The
+// v0.3.0 {audioPath, transcriptText?} return shape was removed by
+// upstream @llblab/pi-telegram@0.38.0+ which deleted the
+// voice.sendTranscript feature entirely. The text+voice composition
+// is now the agent explicit responsibility (handled in index.ts
+// via sendTelegramView with instance scope), not the provider.
 const { synthesizeOgg } = jiti(path.join(process.env.PKG_DIR, "synth.ts"));
-const { loadSynthConfig, loadTelegramConfig } = jiti(path.join(process.env.PKG_DIR, "telegram-config.js")) || jiti(path.join(process.env.PKG_DIR, "telegram-config.ts"));
+const { loadSynthConfig } = jiti(path.join(process.env.PKG_DIR, "telegram-config.js")) || jiti(path.join(process.env.PKG_DIR, "telegram-config.ts"));
 
 (async () => {
   const cfg = loadSynthConfig();
   if (!cfg.provider) { console.error("config not loaded"); process.exit(1); }
-  const telegramConfig = loadTelegramConfig();
-  const text = "Hello, this is a round-trip smoke test from pi-telegram-tts v0.1.0.";
-  const result = await synthesizeOgg(text, { lang: "yue" }, cfg, telegramConfig);
-  if (!result) { console.error("synthesizeOgg returned undefined"); process.exit(1); }
-  if (!fs.existsSync(result.audioPath)) { console.error("audioPath missing:", result.audioPath); process.exit(1); }
-  const stat = fs.statSync(result.audioPath);
-  const fileType = execSync(`file "${result.audioPath}"`, { encoding: "utf8" }).trim();
-  console.log("audioPath:", result.audioPath);
+  const text = "Hello, this is a round-trip smoke test from pi-telegram-tts v0.4.0.";
+  const audioPath = await synthesizeOgg(text, { lang: "yue" }, cfg);
+  if (!audioPath) { console.error("synthesizeOgg returned undefined"); process.exit(1); }
+  if (!fs.existsSync(audioPath)) { console.error("audioPath missing:", audioPath); process.exit(1); }
+  const stat = fs.statSync(audioPath);
+  const fileType = execSync(`file "${audioPath}"`, { encoding: "utf8" }).trim();
+  console.log("audioPath:", audioPath);
   console.log("size:", stat.size, "bytes");
   console.log("file:", fileType);
   if (!/Ogg data.*Opus audio/.test(fileType)) { console.error("not Ogg/Opus"); process.exit(1); }
-  // With voice.sendTranscript=true, the result must include the
-  // transcriptText so the bridge can attach a caption.
-  if (result.transcriptText !== text) { console.error("transcript mismatch (expected:", text, "got:", result.transcriptText, ")"); process.exit(1); }
   // synthesizeOgg schedules a 60s cleanup timer; explicit exit
   // prevents the test from waiting for it.
   process.exit(0);

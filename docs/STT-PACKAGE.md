@@ -1,9 +1,9 @@
 # `pi-telegram-stt` package — design + version history
 
 > **Scope.** The repo's user-facing STT orchestrator. Bundles the
-> `pi-openai-stt` provider (since v0.8.0) and exposes a Telegram
-> Extension Section for the show-transcript toggle + STT provider
-> picker.
+> `pi-openai-stt` provider (since v0.8.0). All configuration is
+> via `telegram.json#extensions["pi-telegram-stt"]` (the section
+> UI was removed in v0.10.0; see the version history below).
 >
 > This file is the design + history record. The implementation
 > lives in `extensions/pi-telegram-stt/*.ts`; the source files
@@ -28,18 +28,20 @@ things:
 3. **Sends a 🎙️ "show transcript" reply** to the user (when
    `showTranscript: true`), so they see the text the agent saw.
 
-The package also owns the **/telegram-settings section** for the
-two operator-facing knobs: `showTranscript` toggle + STT provider
-picker.
+> **v0.10.0:** the `/telegram-settings` → 🎙️ STT section UI was
+> removed (per the operator's 2026-08-24 directive). Both knobs
+> (`showTranscript` + `stt_provider` / `base_url`) are now
+> configured by editing `telegram.json` directly. The hot-reload
+> watcher (200ms debounce) still picks up the change. The matching
+> `pi-telegram-tts` section UI was also removed.
 
 ---
 
-## 2. Files (7 source files, ~1200 lines total)
+## 2. Files (6 source files, ~1200 lines total)
 
 | File | Lines | Purpose |
 |---|---:|---|
-| `index.ts` | 117 | Entry point. Wires the section, the STT handlers, the config watcher, and the module-load provider registration. |
-| `section.ts` | 194 | The /telegram-settings section (default-export factory per `docs/sections.md` §4). |
+| `index.ts` | 118 | Entry point. Wires the STT handlers, the config watcher, and the module-load provider registration. |
 | `echo-handler.ts` | 237 | The two extension points: `registerTelegramUpdateHandler` (chat-ID stash) + `registerTelegramVoiceTranscriptionProvider` (transcribe + echo). |
 | `openai-stt.ts` | 363 | The OpenAI `/v1/audio/transcriptions` HTTP client + the bundled `pi-openai-stt` provider registration. |
 | `telegram-config.ts` | 117 | `telegram.json#extensions["pi-telegram-stt"]` reader + atomic writer. |
@@ -53,7 +55,31 @@ declares the npm metadata.
 
 ## 3. Version history
 
+### v0.10.0 (2026-08-24) — drop the section UI
+- **`section.ts` deleted.** The `/telegram-settings` → 🎙️ STT
+  section was removed per the operator's 2026-08-24 directive
+  (the same directive removed the matching `pi-telegram-tts`
+  section). The form-driven UI was more trouble than the
+  `telegram.json`-driven config for a single-operator setup —
+  the agent can edit `telegram.json` on the fly via its existing
+  `read`/`write` tool calls, and the hot-reload watcher picks up
+  the change in ~200ms
+- **`index.ts` simplified**: dropped the `piTelegramSttSection(pi)`
+  import + call. The package is now section-less (matches
+  `pi-telegram-tts` post-v0.4.0). The provider registration
+  remains module-lifetime (no per-session state to reset; no
+  `session_shutdown` unregister)
+- **Smoke test grew 6 → 7 stages**: stage 7 verifies `section.ts`
+  + `section.js` are gone and `index.ts` does not import them
+  (mirrors the tts smoke's stage 16)
+- **Package size**: 1196 → ~1121 lines (-6%, mainly the deleted
+  `section.ts`)
+
 ### v0.9.0 (2026-08-24) — section rename + dead code removal + flow refactor
+> **Note (added in v0.10.0):** the section work here was a
+> 1-day experiment; the operator found the form UI cumbersome
+> and reverted the whole section UI in v0.10.0. The dead-code
+> removal + flow refactor + comments-to-docs work is preserved.
 - **Section id + label renamed**: `id: "pi-telegram-stt/echo"` →
   `id: "pi-telegram-stt"`, label `"🎙️ Echo"` → `"🎙️ STT"`,
   dynamic menu label `"🟢 Echo · <provider>"` → `"🟢 STT · <provider>"`.
@@ -185,8 +211,8 @@ declares the npm metadata.
 - The hardcoded `whisper-stt.ts` is replaced with a registry
   lookup: the configured `stt_provider` is looked up at STT
   call time in the in-process registry
-- The section UI gains a "STT provider" picker that lists
-  installed providers
+- The section UI (later removed in v0.10.0) gained a "STT
+  provider" picker that lists installed providers
 - Adding a new STT backend = a new `pi-<backend>-stt` package
   that implements `SttProvider`, OR a new `base_url` value if
   the backend already speaks the OpenAI gateway convention
@@ -194,12 +220,12 @@ declares the npm metadata.
 ### v0.2.0 — port from the v0.1.0 scaffold to a working STT path
 - The configurable `stt.command` indirection was replaced with a
   hardcoded call to the STT provider's `transcribe()`
-- The section UI was simplified to a single `showTranscript`
-  toggle (STT command presets removed)
+- The section UI (later removed in v0.10.0) was simplified to a
+  single `showTranscript` toggle (STT command presets removed)
 
 ### v0.1.0 — initial scaffold
 - Configurable `stt.command` (argv spawn) + STT command presets
-  in the section UI
+  in the section UI (later removed in v0.10.0)
 
 ---
 
@@ -211,7 +237,6 @@ declares the npm metadata.
 | `registerTelegramUpdateHandler` | `@llblab/pi-telegram/updates` | Chat-ID stash |
 | `sendTelegramView` | `@llblab/pi-telegram/delivery` | Echo reply |
 | `recordTelegramRuntimeEvent` | `@llblab/pi-telegram/outbound` | Diagnostics |
-| `registerTelegramSection` | `@llblab/pi-telegram/sections` | /telegram-settings UI |
 | `ExtensionAPI`, `getAgentDir` | `@earendil-works/pi-coding-agent` | Extension lifecycle + path resolution |
 
 ---
@@ -260,11 +285,13 @@ providers.
   failure)
 - `pi-telegram-stt/echo` — `send` (echo reply failure)
 
-These are NOT the same as the section's `id`. The section was
-renamed to `id: "pi-telegram-stt"` in v0.8.1; the runtime-event
-categories still use the old `pi-telegram-stt/stt` and
-`pi-telegram-stt/echo` strings because they're a separate
-namespace defined in the bridge's outbound pipeline.
+These are independent of the now-removed section UI. They were
+the runtime-event categories when the section existed (renamed
+in v0.9.0 from `pi-telegram-stt/echo` to `pi-telegram-stt`); the
+section was removed in v0.10.0 but the runtime-event categories
+are a separate namespace defined in the bridge's outbound
+pipeline, so the `pi-telegram-stt/stt` and `pi-telegram-stt/echo`
+strings stay.
 
 ---
 
@@ -275,16 +302,14 @@ Three lifecycles, each with its own scope:
 | Resource | Scope | Why |
 |---|---|---|
 | `pi-openai-stt` provider registration | **Module lifetime** | Stateless; `transcribe()` reads config live; the `globalThis`-backed registry persists for the agent's whole lifetime. Module-load registers it once; hot-reload re-runs the module and re-registers. No per-session re-register or unregister. |
-| Section + handlers + config watcher | **Session lifetime** | The section's `id` is session-scoped (the bridge mints a fresh token per register; the section file's `pi.on("session_shutdown", () => unregister())` cleanup is required by `docs/sections.md` §4). The handlers' closure captures `cfg.showTranscript` + `cfg.stt_provider` which the watcher refreshes on `telegram.json` change. |
+| Handlers + config watcher | **Session lifetime** | The handlers' closure captures `cfg.showTranscript` + `cfg.stt_provider` which the watcher refreshes on `telegram.json` change. `session_start` binds them; `session_shutdown` disposes them. |
 | `chatIdByFileName` map | **Per-transcription** | Populated by the update handler, consumed by the STT provider, deleted in the provider's `finally`. Bounded by in-flight transcriptions. |
 
 ```
 agent start (jiti load)
   └─ registerOpenAiSttProvider()  [module-lifetime; idempotent]
   └─ piTelegramStt(pi)  [default export]
-       └─ piTelegramSttSection(pi)  [wires session_start / session_shutdown]
 session_start
-  ├─ section: registerSttSection()  [deferred; registry unavailable at jiti load]
   ├─ reconfigureHandlers()  [bind the echo + STT provider closures]
   └─ startConfigWatcher()  [fs.watch telegram.json (200ms debounce)]
 voice message
@@ -293,7 +318,6 @@ voice message
 telegram.json change
   └─ reloadTimer (200ms debounce) → reconfigureHandlers()
 session_shutdown
-  ├─ unregister section  [session-scoped]
   ├─ dispose handlers + close watcher
   └─ (STT provider STAYS registered; no per-session reset needed)
 ```

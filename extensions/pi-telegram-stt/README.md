@@ -49,15 +49,14 @@ Edit `~/.pi/agent/telegram.json`:
 > `showTranscript` (semantic symmetry with the bridge's
 > `voice.sendTranscript` — show the user's voice as text vs. send
 > the agent's voice as a caption). The reader still accepts
-> `echoEnabled` as a fallback; the section UI's toggle writes the
-> new key, so the config file migrates itself on first edit.
+> `echoEnabled` as a fallback for back-compat; just edit
+> `telegram.json` to switch.
 
 > **v0.8.0 flat config:** `base_url` and `apiKey` moved from
 > `extensions["pi-openai-stt"]` to top-level keys under
 > `extensions["pi-telegram-stt"]`. The reader still accepts the
 > legacy `extensions["pi-openai-stt"]` block for backward
-> compatibility (read-only), but `saveEchoConfig` only writes
-> the new flat shape. See the migration section below.
+> compatibility (read-only). See the migration section below.
 
 `stt_provider` defaults to `"pi-openai-stt"` (the only bundled provider; the seam is kept for future backends). The bundled provider's `base_url` is a string (single gateway) or a string[] (fallback chain).
 
@@ -84,13 +83,17 @@ If you have an existing `telegram.json` with the old `pi-openai-stt` block:
  }
 ```
 
-The reader still accepts the legacy `extensions["pi-openai-stt"]` block, so your existing config will keep working even if you don't migrate. But `saveEchoConfig` (the section UI's write path) only writes the new flat shape, so the first time you toggle a setting via the section UI, the old `pi-openai-stt` block will be ignored in favor of the new flat keys.
+The reader still accepts the legacy `extensions["pi-openai-stt"]` block, so your existing config will keep working even if you don't migrate. The hot-reload watcher (200ms debounce) picks up any change to `telegram.json` and the next inbound voice message uses the new setting.
 
 The npm package `pi-openai-stt` is deprecated; `npm install pi-openai-stt` will print a deprecation warning. The new install path is just `npm install pi-telegram-stt@latest`.
 
-## Section UI
-
-`/telegram-settings` → 🎙️ STT → toggle on/off + pick the STT provider from the installed list. The section writes to `telegram.json`, the hot-reload watcher (200ms debounce) picks up the change, and the next inbound voice message uses the new setting. (As of v0.9.0 the section is labeled "🎙️ STT"; previous versions used "🎙️ Echo". The bridge mints a fresh section token on the new id, so any in-flight button on the old id surfaces "This section is no longer available" — the operator just needs to re-open `/telegram-settings`.)
+> **v0.10.0:** the `/telegram-settings` → 🎙️ STT section UI was
+> removed (per the operator's 2026-08-24 directive). The same
+> directive removed the matching `pi-telegram-tts` section. For
+> single-operator setups, `telegram.json` is sufficient — the
+> agent can edit it on the fly via the existing `read`/`write`
+> tool calls. The hot-reload watcher still picks up edits in
+> ~200ms; just edit and save.
 
 ## Provider contract (for future backends)
 

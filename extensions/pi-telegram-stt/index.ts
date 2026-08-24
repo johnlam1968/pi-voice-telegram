@@ -1,7 +1,11 @@
 /**
- * pi-telegram-stt — entry point. Wires the section, the STT +
- * 🎙️ echo handlers, the config watcher, and the bundled
- * `pi-openai-stt` provider registration.
+ * pi-telegram-stt — entry point. Wires the STT + 🎙️ echo handlers,
+ * the config watcher, and the bundled `pi-openai-stt` provider
+ * registration.
+ *
+ * **v0.10.0:** the `/telegram-settings` section UI was dropped
+ * (per the operator's request — `telegram.json` is sufficient for
+ * single-operator setups). All config is via `telegram.json`.
  *
  * Full design + version history + per-component docs live in
  * `docs/STT-PACKAGE.md`. This file is the lifecycle orchestrator.
@@ -15,7 +19,6 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { makeLogger } from "./_logger.js";
 import { registerEchoHandlers } from "./echo-handler.js";
 import { registerOpenAiSttProvider } from "./openai-stt.js";
-import piTelegramSttSection from "./section.js";
 import { loadEchoConfig } from "./telegram-config.js";
 
 const log = makeLogger("pi-telegram-stt");
@@ -82,13 +85,11 @@ export default function piTelegramStt(pi: ExtensionAPI): void {
 		}
 	};
 
-	// Section lifecycle is owned by `section.ts`'s default export
-	// (per `docs/sections.md` §4). The STT provider is module-
-	// lifetime — the module-load call above registered it and the
-	// `globalThis`-backed registry keeps it visible for the agent's
-	// whole lifetime. `session_shutdown` does not unregister it
-	// (no per-session state to reset).
-	piTelegramSttSection(pi);
+	// v0.10.0: section UI dropped (see file header). The STT provider
+	// is module-lifetime — the module-load call above registered it
+	// and the `globalThis`-backed registry keeps it visible for the
+	// agent's whole lifetime. `session_shutdown` does not
+	// unregister it (no per-session state to reset).
 
 	pi.on("session_start", () => {
 		log.info("session_start");
