@@ -331,6 +331,93 @@ if (configPath !== undefined) {
 	}
 	deepMerge(body, configObj);
 	log.debug("config merged from file", { path: configPath, keys: Object.keys(configObj) });
+
+	// The deep-merge above is a raw body merge, not a CLI-flag-style
+	// path remap. The `CLI_TO_PATH` table below (and the same
+	// pattern in `tts-openai.mjs`) shows where each top-level key
+	// actually belongs in the API body — e.g. "voice" lands at the
+	// nested `voice_setting.voice_id`, "lang" at top-level
+	// `language_boost`, "speed" at `voice_setting.speed`. Without
+	// this remap, a user writing `--config {"voice": "X"}` would
+	// silently end up with the DEFAULTS' `voice_setting.voice_id`
+	// (Cantonese_CuteGirl) and the top-level `voice: "X"` would be
+	// ignored by the API.
+	//
+	// This is the contract the v0.3.0 `pi-telegram-tts` package
+	// relies on: the provider's per-provider sub-block in
+	// `telegram.json` uses flat names (voice, model, lang, speed,
+	// ...) and `synth.ts` passes them via `--config`. Without this
+	// remap, the sub-block values would land at the wrong depth and
+	// the API would ignore them.
+	//
+	// Runs BEFORE the CLI flag processing below so that an explicit
+	// CLI flag (e.g. `--voice Y`) still wins over a --config key —
+	// same precedence as before (CLI > --config > DEFAULTS).
+	//
+	// Each entry in CLI_TO_PATH is unconditionally remapped. The
+	// `SKIP_PATHS` guard used by the CLI scalar block is not
+	// applied here because that guard exists to prevent the scalar
+	// block from double-handling paths already covered by a
+	// boolean flag (POSITIVE_FLAGS / NEGATIVE_FLAGS). For
+	// --config, every flat key the user sets deserves the same
+	// remap the CLI flag would get.
+	//
+	// No SKIP_PATHS guard: the setNested() call below is a no-op
+	// if `body[path]` already equals the value, and `delete body[flag]`
+	// is always safe (removes the stray top-level key that the
+	// deep-merge would otherwise leave behind — most APIs ignore
+	// unknown fields, but it keeps the request body clean).
+	const remappedKeys = [];
+
+	// v0.3.0 hotfix 3 (in-session, 2026-08-24): extend the
+	// path-mapping to also cover POSITIVE_FLAGS and NEGATIVE_FLAGS
+	// (booleans like `force_cbr`, `aigc_watermark`, `text_normalization`).
+	// The original v0.3.0 hotfix only remapped CLI_TO_PATH entries
+	// (scalars like `voice`, `speed`, `lang`); booleans were a gap
+	// that the v0.3.0 "all knobs" live test exposed.
+	//
+	// The CLI flag tables use kebab-case keys (e.g. `force-cbr`)
+	// because that's what the CLI parser expects (`--force-cbr`).
+	// The user's `--config` JSON uses snake_case (e.g.
+	// `force_cbr: true`), which is the idiomatic JSON convention.
+	// The remap checks both forms so a user can write either
+	// `"force_cbr": true` (snake, recommended) or `"force-cbr": true`
+	// (kebab, matches the CLI flag name) and have either work.
+	function getConfigValue(flag) {
+		if (Object.prototype.hasOwnProperty.call(configObj, flag)) {
+			return configObj[flag];
+		}
+		const snake = flag.replace(/-/g, "_");
+		if (Object.prototype.hasOwnProperty.call(configObj, snake)) {
+			return configObj[snake];
+		}
+		return undefined;
+	}
+	function tryRemap(table, tableName) {
+		for (const [flag, path] of Object.entries(table)) {
+			const value = getConfigValue(flag);
+			if (value === undefined) continue;
+			setNested(body, path, value);
+			// For top-level paths (e.g. `subtitle_enable` is at
+			// top level in the API body), `flag === path`; the
+			// value we just set is the correct field, don't delete
+			// it. For nested paths, delete the stray top-level
+			// key (and its snake-case variant) that the deep-merge
+			// left behind.
+			if (path !== flag) {
+				delete body[flag];
+				const snake = flag.replace(/-/g, "_");
+				if (snake !== flag) delete body[snake];
+			}
+			remappedKeys.push(`${tableName}.${flag}`);
+		}
+	}
+	tryRemap(CLI_TO_PATH, "scalar");
+	tryRemap(POSITIVE_FLAGS, "bool");
+	tryRemap(NEGATIVE_FLAGS, "bool");
+	if (remappedKeys.length > 0) {
+		log.debug("config keys path-mapped", { keys: remappedKeys });
+	}
 }
 
 // CLI: positive boolean flags

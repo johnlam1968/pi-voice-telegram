@@ -6,6 +6,19 @@ the design rationale and implementation context (why we chose this
 shape, what we ruled out, the design patterns to follow, the gotchas,
 and the full v0.1.0 implementation sketch for every source file).
 
+**Last updated 2026-08-24 for the v0.3.0 + v0.3.0-hotfix state;
+v0.1.0 sections are historical.** Status: v0.1.0 design shipped
+2026-08-23. v0.2.0 (section UI) drafted in
+`PI-TELEGRAM-TTS-PLAN.md`, not yet implemented. v0.3.0
+(per-provider config schema) shipped 2026-08-24 with an
+in-session hotfix: the plan's "no script changes needed" was
+based on a misjudgment of how `--config` works (it's a raw
+body deep-merge, not a CLI-flag path remap). The fix is
+~25 lines in `tts-minimax.mjs` + `tts-openai.mjs` applying the
+existing `CLI_TO_PATH` table to `--config` keys. See the v0.3.0
+"deltas from this plan" section in the plan doc for the full
+post-mortem.
+
 **Read the plan first, then read this, then start building.** Together
 they're the briefing for a new session. After reading §1-9 for context
 and rationale, §7 has the full v0.1.0 source code (copy-paste ready),
@@ -427,11 +440,13 @@ export default function piTelegramTts(pi: ExtensionAPI): void {
  * synth.ts — TTS pipeline: spawn the tts-{provider}.mjs script, ffmpeg
  * the result to OGG/Opus, return the path + the original text.
  *
- * The script is invoked by absolute path on dev (operator working from
- * the source repo) or by `node <bin-name>` after `npm install` (the
- * `pi-voice-telegram-scripts` package's `bin` field exposes the same
- * scripts as `tts-minimax` / `tts-openai` on PATH). The `mode` flag
- * below picks between the two resolution strategies.
+ * The script is invoked by absolute path on dev (operator working
+ * from the source repo — same dir as this file) or by
+ * `node <bin-name>` after `npm install` (this package's `bin` field
+ * exposes the same scripts as `tts-minimax` / `tts-openai` on PATH
+ * as of v0.2.0; previously a separate `pi-voice-telegram-scripts`
+ * peer-dep, now deprecated). The `resolveScriptPath` helper picks
+ * between the two resolution strategies.
  */
 
 import { spawn } from "node:child_process";
@@ -454,24 +469,22 @@ const FFMPEG_TIMEOUT_MS = 30_000;
 /**
  * Resolve the path to `tts-{provider}.mjs`.
  *
- * 1. Dev: `<repo>/extensions/pi-voice-telegram-scripts/tts-<provider>.mjs`
- *    (walks up from this file's source location; works regardless of
- *    where the operator cloned the repo).
- * 2. npm install: the `pi-voice-telegram-scripts` package's `bin`
- *    field exposes the same scripts as `tts-<provider>` on PATH. We
- *    hand the resolved path to `node`.
+ * 1. Dev: `<repo>/extensions/pi-telegram-tts/tts-<provider>.mjs`
+ *    (same dir as this file; works regardless of where the operator
+ *    cloned the repo). The scripts were bundled into this package
+ *    in v0.2.0 — previously they lived in a separate
+ *    `pi-voice-telegram-scripts` package, now deprecated.
+ * 2. npm install: this package's `bin` field exposes the same
+ *    scripts as `tts-<provider>` on PATH. We hand the resolved
+ *    name to `node` (Node's PATH lookup is built in).
  *
  * Falls back to the bin name on PATH (resolvable via `spawn("node",
  * ["tts-minimax", ...])` — Node's PATH lookup is built in).
  */
 function resolveScriptPath(provider: "minimax" | "openai"): string {
-  // Dev: same dir as the scripts package. This file is at
-  // extensions/pi-telegram-tts/synth.ts; walk up to extensions/, then
-  // into pi-voice-telegram-scripts/.
+  // Dev: same dir as synth.ts (this file).
   const devPath = join(
     dirname(new URL(import.meta.url).pathname),
-    "..",
-    "pi-voice-telegram-scripts",
     `tts-${provider}.mjs`,
   );
   if (existsSync(devPath)) return devPath;
@@ -818,6 +831,13 @@ From npm (once published):
 pi install npm:pi-telegram-tts
 ```
 
+The `tts-minimax` and `tts-openai` scripts ship **inside this
+package** as of v0.2.0 (previously a separate `pi-voice-telegram-scripts`
+peer-dep, now deprecated). The package's `bin` field exposes both
+on PATH after `npm install`; the provider spawns them by name when
+npm-installed, or by absolute path when dev-loaded (same dir as
+`synth.ts`).
+
 On-host dev loader (one-liner re-export shim), assuming the operator
 runs from the source repo:
 
@@ -826,24 +846,6 @@ cat > ~/.pi/agent/extensions/pi-telegram-tts.ts <<'EOF'
 export { default } from "/path/to/this/repo/extensions/pi-telegram-tts/index.ts";
 EOF
 ```
-
-Also install the scripts package (peer dep):
-
-```bash
-pi install npm:pi-voice-telegram-scripts
-```
-
-Or via the dev loader:
-
-```bash
-cat > ~/.pi/agent/extensions/pi-voice-telegram-scripts.ts <<'EOF'
-export * from "/path/to/this/repo/extensions/pi-voice-telegram-scripts/index.ts";
-EOF
-```
-
-The `pi-voice-telegram-scripts` package exposes the `tts-minimax` and
-`tts-openai` binaries on PATH; the `pi-telegram-tts` provider spawns
-them by name when npm-installed, or by absolute path when dev-loaded.
 
 ## Configure (v0.1.0)
 
@@ -949,17 +951,22 @@ worth a separate §7.x section. The new agent should:
 
 - **`package.json`** — copy `pi-telegram-stt/package.json` and change:
   - `name: "pi-telegram-stt"` → `"pi-telegram-tts"`
-  - `version: "0.7.0"` → `"0.1.0"`
+  - `version: "0.7.0"` → `"0.1.0"` (then `0.2.0` for the v0.2.0
+    scripts-bundle, `0.3.0` for the v0.3.0 per-provider sub-block).
   - `description` → the v0.1.0 description from the plan
-  - `peerDependencies` → drop `pi-openai-stt` (we don't depend on the
-    STT chain), keep `@earendil-works/pi-coding-agent` and
-    `@llblab/pi-telegram` (use `*`, not `^0.16.0` — the voice API is
-    stable across versions, matching the sister package's looseness).
-    Add `pi-voice-telegram-scripts` as a peer dep (the runtime
-    scripts).
+  - `peerDependencies` → drop `pi-openai-stt` (we don't depend on
+    the STT chain), keep `@earendil-works/pi-coding-agent` and
+    `@llblab/pi-telegram` (use `*`, not `^0.16.0` — the voice API
+    is stable across versions, matching the sister package's
+    looseness). **Do not** add `pi-voice-telegram-scripts` as a
+    peer-dep; the scripts are bundled inside this package as of
+    v0.2.0. Also add a `bin` field exposing `tts-minimax` and
+    `tts-openai` on PATH after `npm install`, and include the
+    `.mjs` files in the `files` array (alongside `*.ts` + `README.md`).
   - `exports` — drop the `./stt-provider` subpath export (we don't
     expose one); keep only `.` and the `pi.extensions` field.
-  - `files` — same as sister: `["*.ts", "README.md"]`.
+  - `files` — same as sister plus the `.mjs` files:
+    `["*.ts", "*.mjs", "README.md"]`.
 
 - **`_logger.ts`** — copy `pi-telegram-stt/_logger.ts` verbatim. The
   per-package self-containment is intentional (v0.7.0 design

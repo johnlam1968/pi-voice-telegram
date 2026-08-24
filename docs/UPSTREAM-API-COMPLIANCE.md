@@ -25,11 +25,17 @@ latter.
 |---|---|---|
 | `extensions/pi-telegram-stt/index.ts` | `ExtensionAPI` (factory shape) | `extensions.md` |
 | `extensions/pi-telegram-stt/echo-handler.ts` | `@llblab/pi-telegram/{voice,updates,outbound,delivery}` | `docs/voice.md` |
-| `extensions/pi-telegram-stt/echo-section.ts` | `@llblab/pi-telegram/sections` | `docs/sections.md` |
+| `extensions/pi-telegram-stt/section.ts` | `@llblab/pi-telegram/sections` | `docs/sections.md` |
 | `extensions/pi-telegram-stt/telegram-config.ts` | `getAgentDir` from `@earendil-works/pi-coding-agent` | `dist/config.js` |
 | `extensions/pi-telegram-stt/stt-provider.ts` | (local contract; not a public API) | n/a |
 | `extensions/pi-telegram-stt/openai-stt.ts` | `getAgentDir` from `@earendil-works/pi-coding-agent` (subsumed from `pi-openai-stt` in v0.8.0) | `dist/config.js` |
 | `extensions/pi-voice-telegram-scripts/*` | (CLI scripts; not Pi extensions; deprecated in v0.2.0, scripts merged into `pi-telegram-tts`) | n/a |
+
+The full per-package design + version history for each local
+artifact is in the per-package doc:
+
+- `pi-telegram-stt`: [`docs/STT-PACKAGE.md`](STT-PACKAGE.md)
+- `pi-telegram-tts`: [`docs/PI-TELEGRAM-TTS-PLAN.md`](PI-TELEGRAM-TTS-PLAN.md) and [`docs/PI-TELEGRAM-TTS-DESIGN.md`](PI-TELEGRAM-TTS-DESIGN.md)
 
 The `pi-voice-telegram-scripts` package is **not** a Pi extension — it
 ships CLI scripts (`tts-minimax.mjs`, `tts-openai.mjs`,
@@ -148,7 +154,7 @@ const jiti = createJiti(import.meta.url, { interopDefault: true, esmResolve: tru
 for (const p of [
   './extensions/pi-telegram-stt/index.ts',
   './extensions/pi-telegram-stt/echo-handler.ts',
-  './extensions/pi-telegram-stt/echo-section.ts',
+  './extensions/pi-telegram-stt/section.ts',
   './extensions/pi-telegram-stt/stt-provider.ts',
   './extensions/pi-telegram-stt/telegram-config.ts',
   './extensions/pi-openai-stt/index.ts',

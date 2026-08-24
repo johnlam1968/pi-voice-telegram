@@ -3,29 +3,44 @@
  * the result to OGG/Opus, return the path + the original text.
  *
  * The script is invoked by absolute path on dev (operator working from
- * the source repo) or by `node <bin-name>` after `npm install` (the
- * `pi-voice-telegram-scripts` package's `bin` field exposes the same
- * scripts as `tts-minimax` / `tts-openai` on PATH). The
- * `resolveScriptPath` helper picks between the two resolution
- * strategies.
+ * the source repo) or by `node <bin-name>` after `npm install` (this
+ * package's `bin` field exposes `tts-minimax` / `tts-openai` on PATH
+ * after install). The `resolveScriptPath` helper picks between the
+ * two resolution strategies.
  *
  * The text is piped via stdin (not --text) because the LLM's reply
  * may contain newlines, quotes, or other shell metacharacters; both
  * tts-minimax.mjs and tts-openai.mjs already read from stdin when
  * --text is absent.
+ *
+ * ## v0.3.0 per-provider sub-block dispatch
+ *
+ * Every CLI arg the script supports is reachable from `telegram.json`
+ * via a per-provider sub-block (`minimax: { ... }` or
+ * `openai: { ... }`). We build the request body from the sub-block
+ * (with v0.1.0's top-level `voice` / `model` as fallbacks), write it
+ * to a tempfile, and pass `--config <path>` to the script. The
+ * script's own deep-merge (`DEFAULTS ← --config ← CLI`) takes care of
+ * the rest. See `telegram-config.ts` for the schema + the precedence
+ * rule, and the plan doc §v0.3.0 for the design rationale.
+ *
+ * The script is the source of truth for field-level validation
+ * (enums, ranges, etc.); the TypeScript side just type-guards the
+ * sub-block shape and passes the JSON through verbatim. This keeps
+ * the provider in lockstep with the script's surface — adding a new
+ * script field requires zero changes here.
  */
 
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, unlink } from "node:fs/promises";
+import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 
 import { recordTelegramRuntimeEvent } from "@llblab/pi-telegram/outbound";
-import { getTelegramVoiceSendTranscript } from "@llblab/pi-telegram/voice";
 
-import type { SynthConfig } from "./telegram-config.js";
+import type { ProviderId, SynthConfig } from "./telegram-config.js";
 import { makeLogger } from "./_logger.js";
 
 const log = makeLogger("pi-telegram-tts/synth");
@@ -48,7 +63,7 @@ const FFMPEG_TIMEOUT_MS = 30_000;
  *    exposes the same scripts as `tts-<provider>` on PATH. We hand
  *    the resolved name to `node` (Node's PATH lookup is built in).
  */
-function resolveScriptPath(provider: "minimax" | "openai"): string {
+function resolveScriptPath(provider: ProviderId): string {
 	// Dev: same dir as synth.ts (this file). The scripts moved into
 	// `pi-telegram-tts` in v0.2.0; previously they lived at
 	// `../pi-voice-telegram-scripts/tts-<provider>.mjs` (the v0.1.x
@@ -61,6 +76,38 @@ function resolveScriptPath(provider: "minimax" | "openai"): string {
 	if (existsSync(devPath)) return devPath;
 	// npm install: rely on PATH lookup via `node` argv.
 	return `tts-${provider}`;
+}
+
+/**
+ * Build the per-call JSON the script will consume via `--config`.
+ *
+ * Precedence (per the plan doc §v0.3.0 "Backward compat"):
+ *   effective = { ...topLevel, ...subBlock }
+ * — sub-block fields override top-level when both are present. This
+ * is the per-key merge, not a wholesale replace: a v0.1.0 config
+ * with top-level `voice` and no sub-block still works (top-level is
+ * the only contributor); a v0.3.0 config with both gets the
+ * sub-block values for the fields the sub-block mentions and the
+ * top-level values for everything else.
+ *
+ * v0.1.0 callers that only set top-level `voice` / `model` get the
+ * same `{ voice, model }` body they would have via the v0.1.0
+ * flag-by-flag path. v0.3.0 callers that set the sub-block get
+ * the full set of script fields, including ones the v0.1.0
+ * flag-by-flag path didn't cover (e.g. `lang`, `speed`, `vol`,
+ * `instructions`, `response_format`, arrays like
+ * `pronunciation_dict.tone`, etc.).
+ */
+function buildScriptConfig(
+	cfg: SynthConfig,
+): Record<string, unknown> {
+	if (!cfg.provider) return {};
+	const topLevel: Record<string, unknown> = {};
+	if (cfg.voice !== undefined) topLevel.voice = cfg.voice;
+	if (cfg.model !== undefined) topLevel.model = cfg.model;
+	const subBlock =
+		cfg.provider === "minimax" ? cfg.minimax : cfg.provider === "openai" ? cfg.openai : undefined;
+	return { ...topLevel, ...(subBlock ?? {}) };
 }
 
 /**
@@ -114,26 +161,29 @@ async function runProcess(
 
 /**
  * Synthesize `text` to OGG/Opus via the configured provider.
- * Returns `{ audioPath, transcriptText? }` on success, `undefined` on
- * any failure (the bridge falls through to the next provider).
+ * Returns the OGG path on success, `undefined` on any failure
+ * (the bridge falls through to the next provider).
  *
- * The `telegramConfig` is the full `telegram.json` object — needed
- * to read the bridge-owned `voice.sendTranscript` flag via
- * `getTelegramVoiceSendTranscript(telegramConfig)`. Per the plan
- * §v0.1.0 step 5-6, we only include `transcriptText` in the return
- * value when that flag is true; otherwise the bridge gets a clean
- * `{ audioPath }` and the caption is suppressed.
+ * v0.3.0: the script is invoked with `--config <tempfile>` carrying
+ * the per-provider sub-block (with v0.1.0 top-level fallbacks). The
+ * flag-by-flag `--voice` / `--model` path is gone — every script
+ * arg now flows through `--config`. The script's own `validateBody`
+ * is the runtime validator.
  *
- * v0.1.0 only builds the v0.1.0 top-level config args
- * (`--voice <cfg.voice> --model <cfg.model>`). v0.3.0 expands this
- * to per-provider sub-blocks with the full set of CLI args.
+ * Upstream `@llblab/pi-telegram@0.39.0` removed the
+ * `voice.sendTranscript` config + the
+ * `getTelegramVoiceSendTranscript()` helper + the provider-returned
+ * `transcriptText` field. Synthesis providers now return only the
+ * OGG path; "voice with text caption" is the agent's explicit
+ * composition (compose the text reply + the voice reply), not an
+ * automatic policy. So we no longer need the `telegramConfig`
+ * param: there's no flag to read.
  */
 export async function synthesizeOgg(
 	text: string,
 	_options: { lang?: string; rate?: string } | undefined,
 	cfg: SynthConfig,
-	telegramConfig: Record<string, unknown> = {},
-): Promise<{ audioPath: string; transcriptText?: string } | undefined> {
+): Promise<string | undefined> {
 	if (!cfg.provider) return undefined;
 
 	const tempDir = await mkdtemp(join(tmpdir(), "pi-telegram-tts-"));
@@ -141,26 +191,39 @@ export async function synthesizeOgg(
 	const ogg = join(tempDir, `${randomUUID()}.ogg`);
 
 	try {
-		// Step 1: TTS script → MP3. Text piped via stdin to avoid
+		// Step 1: write the per-call config JSON. The file lives in
+		// the same `tempDir` we'll hand to the script; the existing
+		// 60s cleanup timer (in the `finally` block) removes it
+		// alongside the OGG.
+		const scriptConfig = buildScriptConfig(cfg);
+		const configPath = join(tempDir, "config.json");
+		await writeFile(
+			configPath,
+			JSON.stringify(scriptConfig, null, 2) + "\n",
+			{ encoding: "utf8", mode: 0o600 },
+		);
+
+		// Step 2: TTS script → MP3. Text piped via stdin to avoid
 		// argv-escaping issues with the LLM's reply (newlines, quotes,
-		// shell metacharacters).
+		// shell metacharacters). The script reads its config from
+		// `--config`; the script's own deep-merge (DEFAULTS ← --config
+		// ← CLI) takes care of overrides.
 		const scriptPath = resolveScriptPath(cfg.provider);
 		const scriptArgs = [
 			scriptPath,
 			"--out", mp3,
-			...(cfg.voice ? ["--voice", cfg.voice] : []),
-			...(cfg.model ? ["--model", cfg.model] : []),
+			"--config", configPath,
 		];
 		log.info("tts spawn", {
 			provider: cfg.provider,
-			voice: cfg.voice,
-			model: cfg.model,
+			config: configPath,
+			configKeys: Object.keys(scriptConfig),
 			chars: text.length,
 		});
 		await runProcess("node", scriptArgs, text, SCRIPT_TIMEOUT_MS);
 
-		// Step 2: ffmpeg MP3 → OGG/Opus. The bridge only accepts .ogg /
-		// .opus (see lib/outbound-voice.ts:92-101).
+		// Step 3: ffmpeg MP3 → OGG/Opus. The bridge only accepts
+		// .ogg / .opus (see lib/outbound-voice.ts:92-101).
 		await runProcess(
 			"ffmpeg",
 			[
@@ -179,21 +242,8 @@ export async function synthesizeOgg(
 		// `unlink(ogg)` 30s after upload; see Gotcha #3 in the design doc.)
 		await unlink(mp3).catch(() => {});
 
-		// Read the bridge-owned `voice.sendTranscript` flag. When
-		// false (the default), return only `{ audioPath }` so the
-		// bridge doesn't attach a caption. The plan §v0.1.0 step 5-6
-		// + design doc §3 / §9.1 / §9.2 spell out the contract.
-		const sendTranscript = getTelegramVoiceSendTranscript(
-			telegramConfig as { voice?: { sendTranscript?: boolean } },
-		);
-		log.info("tts ok", {
-			audioPath: ogg,
-			chars: text.length,
-			sendTranscript,
-		});
-		return sendTranscript
-			? { audioPath: ogg, transcriptText: text }
-			: { audioPath: ogg };
+		log.info("tts ok", { audioPath: ogg, chars: text.length });
+		return ogg;
 	} catch (err) {
 		log.error("tts failed", {
 			error: err instanceof Error ? err.message : String(err),
@@ -207,6 +257,8 @@ export async function synthesizeOgg(
 		// Best-effort temp-dir cleanup. The OGG may still be in use by
 		// the bridge's `uploadVoiceFile`; we use `force: true` to ignore
 		// EBUSY and let the OGG linger if needed (see Gotcha #3).
+		// The config.json tempfile lives in the same dir and rides
+		// the same cleanup.
 		setTimeout(() => {
 			rm(tempDir, { recursive: true, force: true }).catch(() => {});
 		}, 60_000);

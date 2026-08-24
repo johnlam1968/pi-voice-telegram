@@ -197,6 +197,23 @@ function deepMerge(target, source) {
 
 const body = { ...DEFAULTS };
 
+// CLI: scalar flags. Each takes a value; coerced to number/boolean/string.
+// Declared BEFORE the --config block because the v0.3.0 path-mapping
+// sub-block below iterates CLI_TO_PATH; in JavaScript, `const` has
+// temporal-dead-zone semantics, so a forward reference would throw
+// `ReferenceError: Cannot access 'CLI_TO_PATH' before initialization`
+// at script load. The MiniMax script avoids this by declaring
+// CLI_TO_PATH at the top of the file; we declare it here for
+// consistency with the tts-openai.mjs layout (it was a sibling of
+// the scalar loop originally).
+const CLI_TO_PATH = {
+	model: "model",
+	voice: "voice",
+	"response-format": "response_format",
+	speed: "speed",
+	instructions: "instructions",
+};
+
 // --config <json>: deep merge into body
 const configPath = getArg("config");
 if (configPath !== undefined) {
@@ -217,17 +234,40 @@ if (configPath !== undefined) {
 	}
 	deepMerge(body, configObj);
 	log.debug("config merged from file", { path: configPath, keys: Object.keys(configObj) });
+
+	// Path-map the --config keys. The OpenAI body is flat (no
+	// nesting), so the remap is a no-op for the current schema —
+	// the same loop is applied here for consistency with
+	// `tts-minimax.mjs`, so that any future field with a nested
+	// path gets the same treatment in both scripts. (Mirrors the
+	// `tts-minimax.mjs` --config path-mapping block; see the
+	// comment there for the v0.3.0 contract that drives this.)
+	const remappedKeys = [];
+	for (const [flag, path] of Object.entries(CLI_TO_PATH)) {
+		if (Object.prototype.hasOwnProperty.call(configObj, flag)) {
+			body[path] = configObj[flag];
+			// Only delete the top-level key if the path is nested.
+			// For top-level paths (e.g. `model: "model"`) the
+			// assignment above IS the correct API field; deleting
+			// it would drop the value the API needs. For nested
+			// paths the deep-merge would have left a stray
+			// top-level key that the API ignores; the delete
+			// cleans it up. (Mirrors the tts-minimax.mjs block —
+			// see the comment there for the v0.3.0 contract.)
+			if (path !== flag) {
+				delete body[flag];
+			}
+			remappedKeys.push(flag);
+		}
+	}
+	if (remappedKeys.length > 0) {
+		log.debug("config keys path-mapped", { keys: remappedKeys });
+	}
 }
 
 // CLI: scalar flags. Each takes a value; coerced to number/boolean/string.
-const CLI_TO_PATH = {
-	model: "model",
-	voice: "voice",
-	"response-format": "response_format",
-	speed: "speed",
-	instructions: "instructions",
-};
-
+// (CLI_TO_PATH is declared above the --config block; see the comment
+// there for why.)
 for (const [flag, path] of Object.entries(CLI_TO_PATH)) {
 	const v = getArg(flag);
 	if (v === undefined) continue;

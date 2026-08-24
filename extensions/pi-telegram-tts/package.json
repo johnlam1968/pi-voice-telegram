@@ -1,6 +1,6 @@
 {
   "name": "pi-telegram-tts",
-  "version": "0.2.0",
+  "version": "0.4.0",
   "description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. Registers a synthesis provider against the bridge's public voice API so voice.sendTranscript and getVoicePromptContribution both work (the v0.19.0 outboundHandlers[0].template path silently drops the transcript). v0.2.0 subsumes the pi-voice-telegram-scripts package — the tts-{minimax,openai}.mjs scripts are now bundled here and exposed via the package's bin field (tts-minimax, tts-openai on PATH after `npm install`). Same scripts, same auth resolution, same ffmpeg output; the only delta vs the v0.1.0 provider is the bundled scripts.",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,7 @@
   "files": [
     "*.ts",
     "*.mjs",
+    "*.json",
     "README.md"
   ],
   "peerDependencies": {

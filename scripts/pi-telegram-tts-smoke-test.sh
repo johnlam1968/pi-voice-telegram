@@ -24,22 +24,17 @@
 #    `extensions["pi-telegram-tts"].provider: "bogus"`,
 #    `provider(text, options)` returns `undefined`.
 # 6. Live TTS round-trip (optional) — with a real MiniMax or OpenAI
-#    config + `voice.sendTranscript: true`, `synthesizeOgg()` returns
-#    a valid OGG/Opus path with the transcript attached; `file`
+#    config, `synthesizeOgg()` returns a valid OGG/Opus path; `file`
 #    confirms the encoding; intermediate MP3 is unlinked.
-# 7. sendTranscript: true → result.transcriptText === input text
-#    (optional; needs network).
-# 8. sendTranscript: false → result.transcriptText === undefined
-#    (optional; needs network). This pins the v0.1.0 fix where
-#    `synthesizeOgg` consults `getTelegramVoiceSendTranscript`.
-# 9-12. `getVoicePromptContribution(view)` across the 4 reachable
+# 7-10. `getVoicePromptContribution(view)` across the 4 reachable
 #    `replyMode × hasVoiceInput` combinations:
-#      9. hidden (all flags false)           → undefined
-#     10. mirror + voice input               → `[tts] Reply briefly; …`
-#     11. always + text input                → `[tts] Reply briefly; …`
-#     12. always + voice input               → `[tts] Reply briefly; …`
-#    Stages 9-12 are pure (no network) so they run even with
-#    `--no-network`.
+#      7. manual (all flags false)            → undefined
+#      8. mirror + voice input               → `[tts] Reply briefly; …`
+#      9. always + text input                → `[tts] Reply briefly; …`
+#     10. always + voice input               → `[tts] Reply briefly; …`
+#    Stages 7-10 are pure (no network) so they run even with
+#    `--no-network`. (Upstream `@llblab/pi-telegram@0.38.0` renamed
+#    `hidden` → `manual`; `hidden` is a read-only alias.)
 # 13. Bridge callable-contract (v0.36.11) — the registered provider
 #     is a *function* (not an object) so the bridge's
 #     `typeof provider !== "function"` gate at
@@ -161,7 +156,7 @@ hr()  { printf -- "------------------------------------------------------------\
 # 1. jiti load + module-load registration
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 1/14 — jiti load + module-load registration"
+echo "pi-telegram-tts-smoke-test: stage 1/16 — jiti load + module-load registration"
 
 NODE_CODE='
 const path = require("node:path");
@@ -198,7 +193,7 @@ fi
 # 2. Re-load idempotency
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 2/14 — re-load idempotency"
+echo "pi-telegram-tts-smoke-test: stage 2/16 — re-load idempotency"
 
 NODE_CODE='
 const path = require("node:path");
@@ -224,7 +219,7 @@ fi
 # 3. Unconfigured fall through (no telegram.json)
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 3/14 — unconfigured → fall through"
+echo "pi-telegram-tts-smoke-test: stage 3/16 — unconfigured → fall through"
 
 # PI_CODING_AGENT_DIR was set to a fresh dir; no telegram.json there.
 NODE_CODE='
@@ -251,7 +246,7 @@ fi
 # 4. Disabled fall through
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 4/14 — disabled → fall through"
+echo "pi-telegram-tts-smoke-test: stage 4/16 — disabled → fall through"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -290,7 +285,7 @@ fi
 # 5. Type-guard fall through (invalid provider id)
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-tts-smoke-test: stage 5/14 — invalid provider → fall through"
+echo "pi-telegram-tts-smoke-test: stage 5/16 — invalid provider → fall through"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
 {
@@ -329,10 +324,10 @@ fi
 # ---------------------------------------------------------------------------
 hr
 if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 6/14 — live TTS round-trip (skipped: --no-network)"
+  echo "pi-telegram-tts-smoke-test: stage 6/16 — live TTS round-trip (skipped: --no-network)"
   info "re-run without --no-network to exercise the full spawn + ffmpeg path"
 else
-  echo "pi-telegram-tts-smoke-test: stage 6/14 — live TTS round-trip (provider=$PROVIDER voice=$VOICE model=$MODEL)"
+  echo "pi-telegram-tts-smoke-test: stage 6/16 — live TTS round-trip (provider=$PROVIDER voice=$VOICE model=$MODEL)"
 
   # Provider-specific env check. The scripts read from env first, then
   # from the mmx/openai config files.
@@ -406,117 +401,17 @@ const { loadSynthConfig, loadTelegramConfig } = jiti(path.join(process.env.PKG_D
 fi
 
 # ---------------------------------------------------------------------------
-# 7. sendTranscript: true → transcriptText === text
-# ---------------------------------------------------------------------------
-hr
-if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 7/14 — sendTranscript true → transcript included (skipped: --no-network)"
-  info "re-run without --no-network to exercise the spawn + ffmpeg path with sendTranscript=true"
-else
-  echo "pi-telegram-tts-smoke-test: stage 7/14 — sendTranscript true → transcript included"
-
-  cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
-{
-  "voice": { "sendTranscript": true },
-  "extensions": {
-    "pi-telegram-tts": {
-      "provider": "$PROVIDER",
-      "voice": "$VOICE",
-      "model": "$MODEL"
-    }
-  }
-}
-EOF
-
-  NODE_CODE='
-const path = require("node:path");
-const jitiModule = require(process.env.JITI_PATH);
-const createJiti = jitiModule.default || jitiModule;
-const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
-const { synthesizeOgg } = jiti(path.join(process.env.PKG_DIR, "synth.ts"));
-const { loadSynthConfig, loadTelegramConfig } = jiti(path.join(process.env.PKG_DIR, "telegram-config.js")) || jiti(path.join(process.env.PKG_DIR, "telegram-config.ts"));
-(async () => {
-  const cfg = loadSynthConfig();
-  const telegramConfig = loadTelegramConfig();
-  const text = "sendTranscript: true should include the transcript text.";
-  const result = await synthesizeOgg(text, {}, cfg, telegramConfig);
-  if (!result) { console.error("returned undefined"); process.exit(1); }
-  if (result.transcriptText !== text) { console.error("expected transcriptText:", text, "got:", result.transcriptText); process.exit(1); }
-  console.log("transcriptText:", JSON.stringify(result.transcriptText));
-  process.exit(0);
-})().catch((e) => { console.error("threw:", e); process.exit(1); });
-'
-
-  if JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE"; then
-    ok "sendTranscript=true → result.transcriptText === input text"
-  else
-    fail "sendTranscript=true did not include transcriptText"
-    exit 7
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 8. sendTranscript: false → transcriptText === undefined
-# ---------------------------------------------------------------------------
-hr
-if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-tts-smoke-test: stage 8/14 — sendTranscript false → transcript suppressed (skipped: --no-network)"
-  info "re-run without --no-network to exercise the spawn + ffmpeg path with sendTranscript=false"
-else
-  echo "pi-telegram-tts-smoke-test: stage 8/14 — sendTranscript false → transcript suppressed"
-
-  cat > "$PI_CODING_AGENT_DIR/telegram.json" <<EOF
-{
-  "voice": { "sendTranscript": false },
-  "extensions": {
-    "pi-telegram-tts": {
-      "provider": "$PROVIDER",
-      "voice": "$VOICE",
-      "model": "$MODEL"
-    }
-  }
-}
-EOF
-
-  NODE_CODE='
-const path = require("node:path");
-const jitiModule = require(process.env.JITI_PATH);
-const createJiti = jitiModule.default || jitiModule;
-const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
-const { synthesizeOgg } = jiti(path.join(process.env.PKG_DIR, "synth.ts"));
-const { loadSynthConfig, loadTelegramConfig } = jiti(path.join(process.env.PKG_DIR, "telegram-config.js")) || jiti(path.join(process.env.PKG_DIR, "telegram-config.ts"));
-(async () => {
-  const cfg = loadSynthConfig();
-  const telegramConfig = loadTelegramConfig();
-  const text = "sendTranscript: false should NOT include the transcript text.";
-  const result = await synthesizeOgg(text, {}, cfg, telegramConfig);
-  if (!result) { console.error("returned undefined"); process.exit(1); }
-  if (result.transcriptText !== undefined) { console.error("expected undefined, got:", result.transcriptText); process.exit(1); }
-  console.log("transcriptText: undefined (correct)");
-  console.log("audioPath present:", !!result.audioPath);
-  process.exit(0);
-})().catch((e) => { console.error("threw:", e); process.exit(1); });
-'
-
-  if JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE"; then
-    ok "sendTranscript=false → result.transcriptText is undefined"
-  else
-    fail "sendTranscript=false did not suppress transcriptText"
-    exit 8
-  fi
-fi
-
-# ---------------------------------------------------------------------------
-# 9-12. getVoicePromptContribution across the 4 reachable view shapes
+# 7-10. getVoicePromptContribution across the 4 reachable view shapes
 # ---------------------------------------------------------------------------
 # The bridge passes a `TelegramVoiceTurnView` computed from
 # `replyMode` + `hasVoiceFile`. The provider's `getVoicePromptContribution`
 # is the only in-process surface that observes the mode. The 4 cases:
-#   9. hidden (all flags false)             → undefined
-#  10. mirror + voice input                 → hint
-#  11. always + text input (no voice file)  → hint
-#  12. always + voice input                 → hint
-# Stages 9-12 are pure (no network), so they run even with --no-network.
+#   7. manual (all flags false)            → undefined
+#   8. mirror + voice input               → hint
+#   9. always + text input (no voice file) → hint
+#  10. always + voice input                → hint
+# Stages 7-10 are pure (no network), so they run even with --no-network.
+# (Upstream `@llblab/pi-telegram@0.38.0` renamed `hidden` → `manual`.)
 
 # Reusable node code template; the view is parameterized.
 NODE_CODE_TEMPLATE='
@@ -542,7 +437,7 @@ if (expectHint) {
 
 # --- 9. hidden: voiceReplyPreferred=false, voiceReplyRequired=false, hasVoiceInput=false
 hr
-echo "pi-telegram-tts-smoke-test: stage 9/14 — getVoicePromptContribution (hidden mode)"
+echo "pi-telegram-tts-smoke-test: stage 7/16 — getVoicePromptContribution (manual mode)"
 if VIEW_JSON='{}' EXPECT_HINT=0 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "hidden view → undefined"
@@ -552,7 +447,7 @@ else
 fi
 
 # --- 10. mirror + voice: hasVoiceInput=true, voiceReplyPreferred=true
-echo "pi-telegram-tts-smoke-test: stage 10/14 — getVoicePromptContribution (mirror + voice)"
+echo "pi-telegram-tts-smoke-test: stage 8/16 — getVoicePromptContribution (mirror + voice)"
 if VIEW_JSON='{"hasVoiceInput":true,"voiceReplyPreferred":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "mirror+voice view → hint"
@@ -562,7 +457,7 @@ else
 fi
 
 # --- 11. always + text: hasVoiceInput=false, voiceReplyRequired=true
-echo "pi-telegram-tts-smoke-test: stage 11/14 — getVoicePromptContribution (always + text)"
+echo "pi-telegram-tts-smoke-test: stage 9/16 — getVoicePromptContribution (always + text)"
 if VIEW_JSON='{"hasVoiceInput":false,"voiceReplyRequired":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "always+text view → hint"
@@ -572,7 +467,7 @@ else
 fi
 
 # --- 12. always + voice: hasVoiceInput=true, voiceReplyRequired=true
-echo "pi-telegram-tts-smoke-test: stage 12/14 — getVoicePromptContribution (always + voice)"
+echo "pi-telegram-tts-smoke-test: stage 10/16 — getVoicePromptContribution (always + voice)"
 if VIEW_JSON='{"hasVoiceInput":true,"voiceReplyPreferred":true,"voiceReplyRequired":true,"userText":"hi"}' EXPECT_HINT=1 \
     JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "$NODE_CODE_TEMPLATE"; then
   ok "always+voice view → hint"
@@ -596,7 +491,7 @@ fi
 # bridge's prompt-contribution loop (`voice.ts:305-312`). No network;
 # runs in `--no-network` mode.
 hr
-echo "pi-telegram-tts-smoke-test: stage 13/14 — bridge callable contract (v0.36.11)"
+echo "pi-telegram-tts-smoke-test: stage 11/16 — bridge callable contract (v0.36.11)"
 
 # Clear telegram.json (stages 6-8 leave a configured one in the
 # temp agent dir). Stage 13 exercises the unconfigured path so the
@@ -661,7 +556,7 @@ fi
 # `resolveScriptPath` uses) AND that `package.json` declares the
 # correct `bin` entries (the npm-install path).
 hr
-echo "pi-telegram-tts-smoke-test: stage 14/14 — bundled scripts exist (v0.2.0)"
+echo "pi-telegram-tts-smoke-test: stage 12/16 — bundled scripts exist (v0.2.0)"
 
 # Dev path: tts-{minimax,openai}.mjs must exist in the same dir as
 # synth.ts (i.e. the package source dir).
@@ -694,6 +589,168 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 13-15. v0.3.0 — per-provider sub-block reader + writer
+#      (loadSynthConfig / saveSynthConfig handle a `minimax: { ... }`
+#      and `openai: { ... }` sub-block under
+#      `extensions["pi-telegram-tts"]`. The script is the runtime
+#      validator; the reader is just the type-guard.)
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-tts-smoke-test: stage 13/16 — v0.3.0 loadSynthConfig().minimax returns the sub-block"
+
+SUB_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadSynthConfig, saveSynthConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tts-sub-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-tts': {
+    disabled: false, provider: 'minimax',
+    minimax: { voice: 'Cantonese_PlayfulMan', model: 'speech-2.8-hd', speed: 1.6 },
+  } },
+}, null, 2));
+
+const cfg = loadSynthConfig();
+if (cfg.provider !== 'minimax') { console.error('provider:', cfg.provider); process.exit(1); }
+if (!cfg.minimax || cfg.minimax.voice !== 'Cantonese_PlayfulMan') { console.error('minimax:', JSON.stringify(cfg.minimax)); process.exit(1); }
+if (cfg.minimax.speed !== 1.6) { console.error('minimax.speed:', cfg.minimax.speed); process.exit(1); }
+console.log('provider:', cfg.provider, '| minimax.voice:', cfg.minimax.voice, '| minimax.model:', cfg.minimax.model, '| speed:', cfg.minimax.speed);
+
+fs.rmSync(tmpDir, { recursive: true, force: true });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "loadSynthConfig returns the minimax sub-block as-is (ProviderConfig is a free-form Record<string, unknown>)"
+else
+  fail "v0.3.0 sub-block reader failed"
+  echo "$SUB_OUT"
+  exit 13
+fi
+
+hr
+echo "pi-telegram-tts-smoke-test: stage 14/16 — v0.3.0 sub-block field > top-level when both present"
+
+PREC_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadSynthConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tts-prec-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-tts': {
+    disabled: false, provider: 'minimax',
+    voice: 'top-level-voice', model: 'top-level-model',
+    minimax: { voice: 'sub-block-voice', model: 'sub-block-model' },
+  } },
+}, null, 2));
+
+// loadSynthConfig returns top-level voice/model; the per-key merge
+// happens in synth.ts's effective-resolution. The READER test:
+// top-level fields are returned (the merge happens at spawn time).
+const cfg = loadSynthConfig();
+if (cfg.voice !== 'top-level-voice') { console.error('top-level voice:', cfg.voice); process.exit(1); }
+if (cfg.model !== 'top-level-model') { console.error('top-level model:', cfg.model); process.exit(1); }
+if (cfg.minimax.voice !== 'sub-block-voice') { console.error('sub-block voice:', cfg.minimax.voice); process.exit(1); }
+console.log('top-level: voice=' + cfg.voice + ', model=' + cfg.model);
+console.log('sub-block: voice=' + cfg.minimax.voice + ', model=' + cfg.minimax.model);
+console.log('(merge happens at synth.ts spawn time, not at load time)');
+
+fs.rmSync(tmpDir, { recursive: true, force: true });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "reader returns both top-level and sub-block; synth.ts's effective-resolution does the per-key merge"
+else
+  fail "v0.3.0 sub-block precedence check failed"
+  echo "$PREC_OUT"
+  exit 14
+fi
+
+hr
+echo "pi-telegram-tts-smoke-test: stage 15/16 — v0.3.0 empty sub-block + top-level voice/model"
+
+EMPTY_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadSynthConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tts-empty-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+// No sub-block at all; only top-level voice/model.
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-tts': {
+    disabled: false, provider: 'minimax',
+    voice: 'Cantonese_PlayfulMan', model: 'speech-2.8-hd',
+  } },
+}, null, 2));
+
+const cfg = loadSynthConfig();
+if (cfg.minimax !== undefined) { console.error('minimax should be undefined when absent:', cfg.minimax); process.exit(1); }
+if (cfg.voice !== 'Cantonese_PlayfulMan') { console.error('voice:', cfg.voice); process.exit(1); }
+console.log('no sub-block; top-level voice=' + cfg.voice + ' model=' + cfg.model);
+
+fs.rmSync(tmpDir, { recursive: true, force: true });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "empty sub-block + top-level voice/model works (sub-block is undefined; top-level takes effect)"
+else
+  fail "v0.3.0 empty sub-block check failed"
+  echo "$EMPTY_OUT"
+  exit 15
+fi
+
+hr
+echo "pi-telegram-tts-smoke-test: stage 16/16 — v0.4.0 no Section UI (the section file was dropped)"
+
+# This is the final stage: it confirms the section file is GONE.
+# Future regressions (someone accidentally adding the section back)
+# will fail this test.
+NOSEC_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e '
+const fs = require("node:fs");
+const path = require("node:path");
+const sectionPath = path.join(process.env.PKG_DIR, "section.ts");
+if (fs.existsSync(sectionPath)) { console.error("section.ts should be DROPPED but exists:", sectionPath); process.exit(1); }
+const sectionJsPath = path.join(process.env.PKG_DIR, "section.js");
+if (fs.existsSync(sectionJsPath)) { console.error("section.js should not exist:", sectionJsPath); process.exit(1); }
+console.log("section.ts/section.js are gone (per operator request 2026-08-24: drop the UI for tts completely)");
+
+// Also verify index.ts does NOT import "./section.js" (the import
+// line, not the word "section" in comments).
+const indexPath = path.join(process.env.PKG_DIR, "index.ts");
+const indexContent = fs.readFileSync(indexPath, "utf8");
+// Use double quotes inside the regex (no single quotes to break
+// the bash single-quoted arg).
+if (/from\s+\S+\/section\S*/.test(indexContent)) {
+  console.error("index.ts still imports ./section:", indexPath);
+  process.exit(1);
+}
+console.log("index.ts does not import the section file (comment refs are OK)");
+' 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "section.ts/section.js dropped; index.ts has no section import"
+else
+  fail "section-removal check failed"
+  echo "$NOSEC_OUT"
+  exit 22
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 hr
@@ -701,7 +758,7 @@ echo "pi-telegram-tts-smoke-test: ALL STAGES PASSED"
 echo "  provider: $PROVIDER"
 echo "  voice:    $VOICE"
 echo "  model:    $MODEL"
-echo "  network:  $([[ $NO_NETWORK -eq 1 ]] && echo "skipped (stages 6/7/8 not run)" || echo "exercised (stages 6/7/8 passed)")"
+echo "  network:  $([[ $NO_NETWORK -eq 1 ]] && echo "skipped (stages 6 not run (6 is the only live network stage))" || echo "exercised (stages 6 passed (the only live network stage))")"
 echo
 echo "  Next: run \`bash scripts/dev-status.sh\` if you want a live snapshot"
 echo "  of the bridge / agent state with the package installed."
