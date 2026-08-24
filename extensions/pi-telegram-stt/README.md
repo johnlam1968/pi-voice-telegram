@@ -90,7 +90,7 @@ The npm package `pi-openai-stt` is deprecated; `npm install pi-openai-stt` will 
 
 ## Section UI
 
-`/telegram-settings` → 🎙️ Echo → toggle on/off + pick the STT provider from the installed list. The section writes to `telegram.json`, the hot-reload watcher (200ms debounce) picks up the change, and the next inbound voice message uses the new setting.
+`/telegram-settings` → 🎙️ STT → toggle on/off + pick the STT provider from the installed list. The section writes to `telegram.json`, the hot-reload watcher (200ms debounce) picks up the change, and the next inbound voice message uses the new setting. (As of v0.9.0 the section is labeled "🎙️ STT"; previous versions used "🎙️ Echo". The bridge mints a fresh section token on the new id, so any in-flight button on the old id surfaces "This section is no longer available" — the operator just needs to re-open `/telegram-settings`.)
 
 ## Provider contract (for future backends)
 
@@ -111,13 +111,11 @@ const provider: SttProvider = {
 // Register at module load (synchronous top-level side effect, same
 // pattern the bundled OpenAI provider uses). The provider is in
 // the registry before any session_start fires, before any message
-// is processed.
-try {
-  registerSttProvider(provider);
-} catch {
-  unregisterSttProvider("my-stt");
-  registerSttProvider(provider);
-}
+// is processed. The unregister-then-register pattern is idempotent:
+// it handles both cold-start (nothing to unregister) and hot-reload
+// (clears the stale entry from a previous load).
+unregisterSttProvider("my-stt");
+registerSttProvider(provider);
 ```
 
 Errors are `ProviderError` with `code: 1|2|3|4` (1=usage, 2=network, 3=4xx, 4=5xx) — the same taxonomy the old monolithic used, so the operator's `telegram-status` view is consistent across providers.

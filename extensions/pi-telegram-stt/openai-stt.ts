@@ -1,86 +1,19 @@
 /**
  * openai-stt — in-process client for the OpenAI `/v1/audio/transcriptions`
- * API gateway convention.
+ * gateway convention, plus the package's bundled STT provider.
  *
- * v0.8.0: subsumed into `pi-telegram-stt`. This file was previously in
- * a separate `pi-openai-stt` npm package; the module-load registration
- * now lives in `pi-telegram-stt/index.ts` and the `base_url` / `apiKey`
- * config keys now sit flat under `extensions["pi-telegram-stt"]` (with
- * a read-only fallback to the legacy `extensions["pi-openai-stt"]` block
- * for operators who haven't migrated yet). The `SttProvider` seam in
- * `stt-provider.ts` stays in case a future backend (e.g. a non-OpenAI
- * speech model) needs to be added without expanding the npm-package
- * surface.
+ * Talks to OpenAI's actual API, the local `fw-openai-sts` shim,
+ * `faster-whisper-server`, `whisper-asr-webservice`, and any other
+ * OpenAI-compatible gateway. The full version history + design
+ * + config resolution + error taxonomy live in
+ * `docs/STT-PACKAGE.md` (this file is intentionally terse — the
+ * implementation is short, the docstring would be longer than the
+ * code).
  *
- * v0.4.5: `base_url` (and `OpenAiSttArgs.baseUrl`, and
- * `OPENAI_STT_BASE_URL`) accept a fallback chain — a `string[]` of
- * gateway URLs tried in order. The first non-empty transcript
- * wins; empty results and `OpenAiSttError`s both fall through to
- * the next URL. The natural on-host shape is
- * `["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]` —
- * local CUDA whisper-server runs free / low-latency until it dies,
- * then OpenAI takes over for the same call.
- *
- * v0.4.4: read `base_url` and `api_key` from `telegram.json` (the
- * bridge's canonical config file) before falling back to env vars
- * and the `auth.json` fallback. The recommended way to switch
- * between local (`fw-openai-sts` shim) and cloud (OpenAI's actual
- * API) is one line in `telegram.json`:
- *
- *   "extensions": {
- *     "pi-telegram-stt": { "base_url": "http://127.0.0.1:8081/v1" }
- *   }
- *
- * v0.4.3: strip `language` for `api.openai.com` (OpenAI's Whisper
- * rejects `yue` with HTTP 400 even though it's a valid ISO 639-1
- * code; auto-detect handles Cantonese correctly). The local shim
- * and other gateways keep `language`.
- *
- * v0.4.2: read `OPENAI_API_KEY` from `~/.pi/agent/auth.json` as a
- * fallback. v0.4.1: smart default for `OPENAI_STT_BASE_URL`
- * (OpenAI's API if a key is resolvable, local shim otherwise).
- *
- * The same code talks to:
- *   - OpenAI's actual API (`base_url=https://api.openai.com/v1`,
- *     `api_key=sk-...`)
- *   - The local `fw-openai-sts` shim (the on-host `whisper-server`
- *     exposed as OpenAI-compatible; preserves the existing CUDA +
- *     large-v3-in-VRAM setup with zero changes to the inference
- *     engine)
- *   - `faster-whisper-server` with `--enable-openai-api`
- *   - `whisper-asr-webservice`
- *   - Any other OpenAI-compatible gateway
- *
- * Config resolution (first non-empty list wins):
- *   1. Explicit `OpenAiSttArgs.baseUrl` (string or string[]; test path)
- *   2. `extensions["pi-telegram-stt"].base_url` / `.apiKey` in
- *      `telegram.json` (string or string[]; recommended for live config
- *      as of v0.8.0). Falls back to the legacy
- *      `extensions["pi-openai-stt"]` block (read-only) for operators
- *      who haven't migrated yet.
- *   3. `OPENAI_STT_BASE_URL` / `OPENAI_API_KEY` env vars
- *      (string for env, or comma-separated list for the fallback chain;
- *      CI / container overrides)
- *   4. `auth.json` → `openai.key` (only for the API key; the base
- *      URL has no auth.json equivalent)
- *   5. Smart default: `https://api.openai.com/v1` if a key is
- *      resolvable from any of the above, else the local shim
- *      `http://127.0.0.1:8081/v1`
- *
- * Other env vars (no `telegram.json` equivalent — kept env-only):
- *   - `OPENAI_STT_MODEL` (default `whisper-1`).
- *   - `PI_TELEGRAM_LANG` (default `yue`).
- *
- * Errors are thrown as `OpenAiSttError` with `code: 1|2|3|4`:
- *   1  usage / validation
- *   2  network (timeout, DNS, connection refused)
- *   3  API client (HTTP 4xx, or malformed response)
- *   4  API server (HTTP 5xx)
- *
- * The provider in `index.ts` re-wraps `OpenAiSttError` as
- * `ProviderError` to keep the registry's `code: 1|2|3|4` taxonomy
- * consistent across all STT providers and the old monolithic's
- * `WhisperSttError` (1=usage, 2=network, 3=4xx, 4=5xx).
+ * Provider registration: `registerOpenAiSttProvider()` is the
+ * module-load side effect that puts the provider in the
+ * in-process registry before any `session_start` fires (load-
+ * order invariant from v0.3.1).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -90,6 +23,13 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
 import { makeLogger } from "./_logger.js";
 import { loadEchoConfig } from "./telegram-config.js";
+import {
+	registerSttProvider,
+	unregisterSttProvider,
+	ProviderError,
+	type SttProvider,
+	type SttRequest,
+} from "./stt-provider.js";
 
 const log = makeLogger("pi-telegram-stt/stt/http");
 
@@ -104,17 +44,15 @@ export interface OpenAiSttArgs {
 	 *  or a fallback chain (string[]): the provider tries each URL
 	 *  in order, returning the first non-empty transcript, and falls
 	 *  through to the next on either an empty result or an
-	 *  `OpenAiSttError`. Useful for "local first, cloud fallback"
-	 *  topologies — set `telegram.json`'s `base_url` to
-	 *  `["http://127.0.0.1:8081/v1", "https://api.openai.com/v1"]` and
-	 *  the local shim runs free / low-latency until it dies, then
-	 *  OpenAI takes over. */
+	 *  `OpenAiSttError`. */
 	baseUrl?: string | string[];
 	/** Override the API key. */
 	apiKey?: string;
 	/** Override the model name. */
 	model?: string;
 }
+
+const PROVIDER_ID = "pi-openai-stt";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_MODEL = "whisper-1";
@@ -137,31 +75,10 @@ export class OpenAiSttError extends Error {
 	}
 }
 
-/** Read the `extensions["pi-telegram-stt"]` block from `telegram.json`
- *  (the bridge's canonical config file) for the OpenAI STT config.
- *  Returns `{ baseUrl?, apiKey? }`. Reads the flat `base_url` /
- *  `apiKey` keys under the v0.8.0 shape; falls back to the legacy
- *  `extensions["pi-openai-stt"].base_url` / `.api_key` block for
- *  operators who haven't migrated yet (read-only fallback — the
- *  legacy block is no longer written by `saveEchoConfig`).
- *
- *  The supported keys are:
- *
- *    - `base_url` (flat, v0.8.0+) → overrides `OPENAI_STT_BASE_URL`
- *      (and the smart default that picks OpenAI's API when a key is
- *      present). Use `http://127.0.0.1:8081/v1` for the local
- *      `fw-openai-sts` shim, or any OpenAI-compatible gateway URL.
- *    - `apiKey` (flat, v0.8.0+)   → overrides `OPENAI_API_KEY` (and
- *      the `~/.pi/agent/auth.json` fallback). Useful for
- *      key-per-profile routing when one `telegram.json` is shared
- *      across multiple bot profiles.
- *    - `extensions["pi-openai-stt"].base_url` / `.api_key`
- *      (legacy, v0.7.x and earlier) → read-only fallback.
- *
- *  This makes the local-vs-cloud switch a one-line edit in
- *  `telegram.json` instead of an env-var dance, which matches the
- *  rest of the bridge's config conventions. Env vars still win for
- *  one-off overrides (CI, container runs). */
+/** Read the flat `base_url` / `apiKey` keys from
+ *  `extensions["pi-telegram-stt"]` in `telegram.json`. The
+ *  recommended live config source; the env-var + auth.json
+ *  fallbacks come later in `transcribe()`. */
 function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: string } {
 	const cfg = loadEchoConfig();
 	const out: { baseUrl?: string | string[]; apiKey?: string } = {};
@@ -170,16 +87,9 @@ function readTelegramJsonSttConfig(): { baseUrl?: string | string[]; apiKey?: st
 	return out;
 }
 
-/** Read the OpenAI API key from `~/.pi/agent/auth.json` (the standard
- *  pi-coding-agent credentials file). Returns `undefined` if the file
- *  is missing, unreadable, malformed, or doesn't have an `openai.key`
- *  entry. Used as a fallback when the `OPENAI_API_KEY` env var isn't
- *  set — the on-host path "just works" if the operator already has
- *  the key in `auth.json` (which the LLM provider also reads).
- *
- *  `PI_CODING_AGENT_DIR` is honored via the upstream
- *  `getAgentDir()` helper (matches the bridge and the
- *  `pi-telegram-stt`'s `telegram-config.ts` pattern). */
+/** Read the OpenAI API key from `~/.pi/agent/auth.json` (the
+ *  LLM provider reads the same file). The on-host "just works"
+ *  if the operator already has the key in `auth.json`. */
 function readOpenAiKeyFromAuthJson(): string | undefined {
 	const dir = getAgentDir();
 	const authPath = join(dir, "auth.json");
@@ -199,11 +109,8 @@ function readOpenAiKeyFromAuthJson(): string | undefined {
 	return undefined;
 }
 
-/** Return the first non-empty value in `values`. Treats `undefined`,
- *  `null`, and `""` as unset so an operator who sets (and then
- *  unsets) an env var falls through to the next option. Used for
- *  env-var chains where an empty string is never a valid value
- *  (API key, base URL). */
+/** First non-empty value. `undefined` / `null` / `""` count as
+ *  unset so a removed env var falls through to the next option. */
 function firstNonEmpty(...values: Array<string | undefined>): string | undefined {
 	for (const v of values) {
 		if (v !== undefined && v !== null && v !== "") return v;
@@ -211,11 +118,9 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 	return undefined;
 }
 
-/** Normalize a `string | string[] | undefined` config value into a
- *  `string[]` of non-empty URLs. Drops non-string entries and empty
- *  strings. The fallback-chain semantics in `transcribe()` want a
- *  list, never a single string, so this is the one place we
- *  canonicalize. */
+/** Normalize a `string | string[] | undefined` to a `string[]`
+ *  of non-empty URLs. The fallback chain in `transcribe()` wants
+ *  a list, never a single string. */
 function normalizeBaseUrlList(value: unknown): string[] {
 	if (typeof value === "string") {
 		return value ? [value] : [];
@@ -253,25 +158,16 @@ async function transcribeAtBaseUrl(
 	}
 	const filename = inputPath.split("/").pop() ?? "voice.ogg";
 
-	// Build the multipart body. `request response_format=text` so the
-	// API returns plain text directly (no JSON unwrap).
+	// Build the multipart body. `response_format=text` returns plain
+	// text directly (no JSON unwrap).
 	const form = new FormData();
 	form.append("file", new Blob([bytes], { type: "audio/ogg" }), filename);
 	form.append("model", model);
-	// OpenAI's Whisper API accepts a limited set of ISO-639-1 language
-	// codes (en, zh, es, fr, de, ja, ko, etc.) and rejects others
-	// (e.g. `yue` for Cantonese) with HTTP 400 even though they're
-	// valid ISO 639-1. The clean fix for OpenAI's actual API is to
-	// omit the `language` field and let Whisper auto-detect — its
-	// auto-detect handles Cantonese correctly. The local
-	// `fw-openai-sts` shim (whisper.cpp) supports `yue` and
-	// forwards to whisper.cpp's `--language yue`, so we keep
-	// `language` for that path. Other OpenAI-compatible gateways
-	// (faster-whisper-server, etc.) usually accept the same set
-	// as their underlying model, so we keep `language` for them.
-	//
-	// The check is host-based: only OpenAI's actual API strips
-	// `language`. Custom gateways on a different host keep it.
+	// OpenAI's actual API rejects `language=yue` with HTTP 400 even
+	// though it's a valid ISO 639-1 (auto-detect handles Cantonese
+	// correctly). The local `fw-openai-sts` shim (whisper.cpp)
+	// supports `yue`. So: strip `language` only for api.openai.com.
+	// Other OpenAI-compatible gateways keep it.
 	let isOpenAiApi = false;
 	try {
 		const u = new URL(baseUrl);
@@ -338,26 +234,15 @@ async function transcribeAtBaseUrl(
 }
 
 /** Transcribe an audio file via the OpenAI `/v1/audio/transcriptions`
- *  endpoint. Throws `OpenAiSttError` on validation, network, or
- *  server failures. v0.4.4: walks a fallback chain of base URLs
- *  (one or more, in order), returning the first non-empty
- *  transcript. Empty results and `OpenAiSttError`s both fall
- *  through to the next URL. The final error is thrown if every URL
- *  in the chain fails. */
+ *  endpoint. Walks a fallback chain of base URLs; empty results
+ *  and `OpenAiSttError`s both fall through to the next URL. The
+ *  final error is thrown if every URL in the chain fails. */
 export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 	if (!args.inputPath) {
 		throw new OpenAiSttError("openai-stt: missing inputPath", 1);
 	}
 
-	// API key resolution: explicit arg > telegram.json > env var >
-	// auth.json fallback. The auth.json fallback is for the on-host
-	// path — operators who already have the key in `auth.json` (the
-	// LLM provider reads the same file) don't need to set a separate
-	// env var for STT. `telegram.json` is the bridge's canonical
-	// config file, so the operator can pin the key per profile
-	// without touching the environment. `firstNonEmpty` treats an
-	// empty string as unset so unsets fall through to the next
-	// option.
+	// API key resolution: explicit arg > telegram.json > env > auth.json
 	const telegramSttConfig = readTelegramJsonSttConfig();
 	const apiKey = firstNonEmpty(
 		args.apiKey,
@@ -366,15 +251,9 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 		readOpenAiKeyFromAuthJson(),
 	);
 
-	// baseUrl resolution: explicit arg > telegram.json > env var >
-	// smart default. Each source can be a single URL or an array of
-	// URLs (fallback chain); the first non-empty list wins. The
-	// smart default is a single URL picked by whether a key is
-	// resolvable: OpenAI's API if yes, local shim if no.
-	//
-	// `telegram.json` is the recommended live config source — set
-	// `extensions["pi-openai-stt"].base_url` to either a URL or a
-	// `["local", "cloud"]` array.
+	// baseUrl resolution: explicit arg > telegram.json > env >
+	// smart default (OpenAI's API if a key is resolvable, else the
+	// local shim). Each source can be a single URL or an array.
 	const fromArgs = normalizeBaseUrlList(args.baseUrl);
 	const fromTelegram = normalizeBaseUrlList(telegramSttConfig.baseUrl);
 	const fromEnv = normalizeBaseUrlList(process.env.OPENAI_STT_BASE_URL);
@@ -411,25 +290,19 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 			);
 			if (result) return result;
 			emptyCount += 1;
-			// Empty result — fall through to the next URL.
 		} catch (err) {
-			if (err instanceof OpenAiSttError) {
-				lastError = err;
-			} else {
-				lastError = new OpenAiSttError(
-					err instanceof Error ? err.message : String(err),
-					1,
-					{ baseUrl },
-				);
-			}
-			// Errored — fall through to the next URL.
+			lastError =
+				err instanceof OpenAiSttError
+					? err
+					: new OpenAiSttError(
+							err instanceof Error ? err.message : String(err),
+							1,
+							{ baseUrl },
+					  );
 		}
 	}
 
 	if (lastError) {
-		// Re-throw the last error but include the chain context so
-		// the operator can see how many URLs were tried and which
-		// ones were in the chain when nothing worked.
 		throw new OpenAiSttError(
 			`${lastError.message} (tried ${baseUrls.length} base URL(s) in order)`,
 			lastError.code,
@@ -441,4 +314,50 @@ export async function transcribe(args: OpenAiSttArgs): Promise<string> {
 		1,
 		{ tried: baseUrls, emptyCount },
 	);
+}
+
+// --- Bundled STT provider (registered at module load) -------------------
+
+/** Wrap `transcribe()` as an `SttProvider`. `OpenAiSttError` is
+ *  re-wrapped as `ProviderError` to keep the registry's
+ *  `code: 1|2|3|4` taxonomy consistent. */
+const openaiProvider: SttProvider = {
+	id: PROVIDER_ID,
+	label: "🟢 OpenAI (any compatible)",
+	async transcribe(req: SttRequest): Promise<string> {
+		log.info("transcribe start", { file: req.inputPath, lang: req.lang });
+		try {
+			const text = await transcribe({ inputPath: req.inputPath, lang: req.lang });
+			log.info("transcribe ok", { chars: text.length });
+			return text;
+		} catch (err) {
+			if (err instanceof OpenAiSttError) {
+				log.error("transcribe failed", {
+					code: err.code,
+					detail: err.detail ? JSON.stringify(err.detail) : undefined,
+					error: err.message,
+				});
+				throw new ProviderError(err.message, err.code, err.detail);
+			}
+			log.error("transcribe failed (unwrapped)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+			throw new ProviderError(
+				err instanceof Error ? err.message : String(err),
+				1,
+			);
+		}
+	},
+};
+
+/** Register the bundled OpenAI-compatible provider in the
+ *  in-process registry. Called at module load so the provider
+ *  is in the registry before any `session_start` fires. The
+ *  unregister-first-then-register pattern is idempotent: it
+ *  handles both cold-start (nothing to unregister) and
+ *  hot-reload (clears the stale entry from a previous load). */
+export function registerOpenAiSttProvider(): void {
+	unregisterSttProvider(PROVIDER_ID);
+	registerSttProvider(openaiProvider);
+	log.info("registered", { id: PROVIDER_ID });
 }

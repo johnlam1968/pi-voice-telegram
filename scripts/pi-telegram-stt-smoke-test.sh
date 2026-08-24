@@ -120,7 +120,7 @@ hr()  { printf -- "------------------------------------------------------------\
 # 1. jiti load + module-load registration
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-stt-smoke-test: stage 1/6 — jiti load + module-load registration"
+echo "pi-telegram-stt-smoke-test: stage 1/13 — jiti load + module-load registration"
 
 NODE_CODE='
 const path = require("node:path");
@@ -130,7 +130,7 @@ const PKG = process.env.PKG_DIR;
 const jiti = createJiti(PKG, { esmResolve: true, interopDefault: true });
 
 // Load all 6 source files; module-load side effects run.
-for (const f of ["index.ts", "echo-handler.ts", "echo-section.ts", "telegram-config.ts", "stt-provider.ts", "openai-stt.ts", "_logger.ts"]) {
+for (const f of ["index.ts", "echo-handler.ts", "section.ts", "telegram-config.ts", "stt-provider.ts", "openai-stt.ts", "_logger.ts"]) {
   jiti(path.join(PKG, f));
 }
 
@@ -156,7 +156,7 @@ fi
 # 2. Re-load idempotency
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-stt-smoke-test: stage 2/6 — re-load idempotency"
+echo "pi-telegram-stt-smoke-test: stage 2/13 — re-load idempotency"
 
 NODE_CODE='
 const path = require("node:path");
@@ -183,7 +183,7 @@ fi
 #    registered and can be invoked
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-stt-smoke-test: stage 3/6 — unconfigured → provider callable"
+echo "pi-telegram-stt-smoke-test: stage 3/13 — unconfigured → provider callable"
 
 # PI_CODING_AGENT_DIR was set to a fresh dir; no telegram.json there.
 # The provider is still in the registry and can be called — it falls
@@ -213,7 +213,7 @@ fi
 # 4. Config merge — loadEchoConfig returns the flat v0.8.0 shape
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-stt-smoke-test: stage 4/6 — config merge (flat v0.8.0 shape)"
+echo "pi-telegram-stt-smoke-test: stage 4/13 — config merge (flat v0.8.0 shape)"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<'EOF'
 {
@@ -268,7 +268,7 @@ fi
 #    provider surfaces errors correctly when base_url is unreachable
 # ---------------------------------------------------------------------------
 hr
-echo "pi-telegram-stt-smoke-test: stage 5/6 — invalid base_url → network error"
+echo "pi-telegram-stt-smoke-test: stage 5/13 — invalid base_url → network error"
 
 cat > "$PI_CODING_AGENT_DIR/telegram.json" <<'EOF'
 {
@@ -328,10 +328,10 @@ fi
 # ---------------------------------------------------------------------------
 hr
 if [[ $NO_NETWORK -eq 1 ]]; then
-  echo "pi-telegram-stt-smoke-test: stage 6/6 — live STT round-trip (skipped: --no-network)"
+  echo "pi-telegram-stt-smoke-test: stage 6/13 — live STT round-trip (skipped: --no-network)"
   info "re-run without --no-network to exercise the full transcribe path against base_url"
 else
-  echo "pi-telegram-stt-smoke-test: stage 6/6 — live STT round-trip"
+  echo "pi-telegram-stt-smoke-test: stage 6/13 — live STT round-trip"
 
   # Point the bundled provider at the local whisper-server. The
   # default base_url is http://127.0.0.1:8081/v1 (the fw-openai-sts
@@ -398,6 +398,515 @@ const { transcribe } = jiti(path.join(process.env.PKG_DIR, "openai-stt.ts"));
     fail "live round-trip failed unexpectedly"
     exit 6
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 7. Section registration — jiti-load section.ts, call the
+#    default-export factory against a stub
+#    `globalThis.__piTelegramSectionRegistry__` + stub
+#    ExtensionAPI. Asserts the section is registered with
+#    `id: "pi-telegram-stt"`, `label: "🎙️ STT"`, `order: 10`,
+#    and a `session_shutdown` handler is wired.
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 7/13 — section registration shape"
+
+SECTION_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+
+// Stub the bridge's section registry on globalThis.
+const sections = [];
+const registry = {
+  register(section) {
+    sections.push({ registration: section, token: 'tok' + sections.length });
+    return () => {
+      const idx = sections.findIndex(s => s.registration === section);
+      if (idx >= 0) sections.splice(idx, 1);
+    };
+  },
+  getSections() { return sections.slice(); },
+  getByToken(token) { return sections.find(s => s.token === token); },
+};
+globalThis['__piTelegramSectionRegistry__'] = registry;
+
+// Stub the STT provider registry so listSttProviders() returns at
+// least one entry (used by renderSettingsText + the provider
+// picker).
+globalThis['__piTelegramSttProviderRegistry__'] = {
+  providers: new Map([
+    ['pi-openai-stt', { id: 'pi-openai-stt', label: '🟢 OpenAI (any compatible)', transcribe: async () => '' }],
+  ]),
+};
+
+// Stub ExtensionAPI: only on(event, handler) is needed.
+const handlers = {};
+const pi = { on: (event, h) => { handlers[event] = h; } };
+
+const sectionMod = jiti(process.env.PKG_DIR + '/section.ts');
+if (typeof sectionMod.default !== 'function') { console.error('default export is not a function'); process.exit(1); }
+sectionMod.default(pi);
+
+// The default-export factory defers registerTelegramSection to
+// session_start (the bridge's section registry is only populated
+// after the bridge has initialized, which happens between jiti
+// load and the first session_start — see the live test on
+// 2026-08-24 that surfaced this load-order error). Drive the
+// session_start handler to trigger the actual registration.
+if (typeof handlers['session_start'] !== 'function') { console.error('session_start handler not wired'); process.exit(1); }
+handlers['session_start']();
+
+if (sections.length !== 1) { console.error('expected 1 registered section, got', sections.length); process.exit(1); }
+const s = sections[0].registration;
+if (s.id !== 'pi-telegram-stt') { console.error('id =', s.id, '(expected pi-telegram-stt)'); process.exit(1); }
+if (s.label !== '🎙️ STT') { console.error('label =', s.label); process.exit(1); }
+if (s.order !== 10) { console.error('order =', s.order); process.exit(1); }
+if (typeof s.getLabel !== 'function') { console.error('getLabel is not a function'); process.exit(1); }
+if (typeof s.render !== 'function') { console.error('render is not a function'); process.exit(1); }
+if (typeof s.handleCallback !== 'function') { console.error('handleCallback is not a function'); process.exit(1); }
+if (!s.settings || typeof s.settings.open !== 'function') { console.error('settings.open is not a function'); process.exit(1); }
+if (typeof handlers['session_shutdown'] !== 'function') { console.error('session_shutdown handler not wired'); process.exit(1); }
+console.log('session_start fired, section registered with id=pi-telegram-stt, label=🎙️ STT, order=10');
+console.log('session_shutdown handler wired (', typeof handlers['session_shutdown'], ')');
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "section.ts default-export factory registers (on session_start) with id=pi-telegram-stt, label=🎙️ STT, order=10, wires session_shutdown"
+else
+  fail "section registration shape check failed"
+  echo "$SECTION_OUT"
+  exit 7
+fi
+
+# ---------------------------------------------------------------------------
+# 8. Section idempotency — calling the default-export factory a
+#    second time should throw (the bridge registry enforces
+#    single-key by id). Registry stays at 1 entry.
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 8/13 — section idempotency"
+
+SECTION_IDEMP_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+
+const sections = [];
+const registry = {
+  register(section) {
+    const dup = sections.find(s => s.registration.id === section.id);
+    if (dup) throw new Error('Telegram section id already registered: ' + section.id);
+    const entry = { registration: section, token: 'tok' + sections.length };
+    sections.push(entry);
+    return () => { const i = sections.indexOf(entry); if (i >= 0) sections.splice(i, 1); };
+  },
+  getSections() { return sections.slice(); },
+};
+globalThis['__piTelegramSectionRegistry__'] = registry;
+globalThis['__piTelegramSttProviderRegistry__'] = { providers: new Map() };
+
+const handlers = {};
+const pi = { on: (event, h) => { handlers[event] = h; } };
+const sectionMod = jiti(process.env.PKG_DIR + '/section.ts');
+
+// Drive session_start to actually register the section.
+sectionMod.default(pi);
+handlers['session_start']();
+if (sections.length !== 1) { console.error('first session_start: expected 1 section, got', sections.length); process.exit(1); }
+
+// Second session_start (e.g., another session in the same agent)
+// re-registers, but the registry's single-key guard throws. The
+// factory doesn't catch it, so the throw propagates out.
+let threw = false;
+try { handlers['session_start'](); } catch (e) { threw = true; }
+if (!threw) { console.error('second session_start: expected throw, got success'); process.exit(1); }
+if (sections.length !== 1) { console.error('second session_start: expected 1 section, got', sections.length); process.exit(1); }
+console.log('first session_start: 1 section registered');
+console.log('second session_start: threw (idempotency), registry still 1 entry');
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "default-export factory is single-keyed; second session_start throws, registry stays at 1 entry"
+else
+  fail "section idempotency check failed"
+  echo "$SECTION_IDEMP_OUT"
+  exit 8
+fi
+
+# ---------------------------------------------------------------------------
+# 9. saveEchoConfig atomic write — round-trip a save + load +
+#    assert the .tmp file is gone, the bridge-owned `voice` block
+#    is preserved, and any sibling extension's block is preserved.
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 9/13 — saveEchoConfig atomic write"
+
+ATOMIC_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" REPO_ROOT="$REPO_ROOT" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { saveEchoConfig, loadEchoConfig } =
+  jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-stt-savecfg-'));
+const cfgPath = path.join(tmpDir, 'telegram.json');
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(cfgPath, JSON.stringify({
+  voice: { sendTranscript: true },
+  extensions: {
+    'pi-telegram-tts': { provider: 'minimax' },
+    'pi-other': { custom: 'preserved' },
+  },
+}, null, 2));
+
+saveEchoConfig({ showTranscript: false, stt_provider: 'pi-other-stt' });
+
+if (fs.existsSync(cfgPath + '.tmp')) { console.error('tmp file still present'); process.exit(1); }
+
+const loaded = loadEchoConfig();
+if (loaded.showTranscript !== false) { console.error('showTranscript =', loaded.showTranscript); process.exit(1); }
+if (loaded.stt_provider !== 'pi-other-stt') { console.error('stt_provider =', loaded.stt_provider); process.exit(1); }
+
+// Read the full file directly (the stt package's telegram-config.ts
+// does not export loadTelegramConfig; the tts package does, but this
+// is the stt package's smoke test).
+const full = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+if (full.extensions['pi-telegram-tts']?.provider !== 'minimax') {
+  console.error('pi-telegram-tts block was overwritten:', JSON.stringify(full.extensions['pi-telegram-tts']));
+  process.exit(1);
+}
+if (full.extensions['pi-other']?.custom !== 'preserved') {
+  console.error('pi-other block was overwritten:', JSON.stringify(full.extensions['pi-other']));
+  process.exit(1);
+}
+if (full.voice?.sendTranscript !== true) {
+  console.error('voice.sendTranscript was overwritten:', JSON.stringify(full.voice));
+  process.exit(1);
+}
+console.log('saveEchoConfig round-trip: showTranscript=false, stt_provider=pi-other-stt');
+console.log('atomic discipline: no .tmp file left');
+console.log('preserved: pi-telegram-tts block + pi-other block + voice.sendTranscript');
+
+fs.rmSync(tmpDir, { recursive: true, force: true });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "saveEchoConfig writes atomically (no .tmp), preserves other extensions and bridge-owned blocks"
+else
+  fail "saveEchoConfig atomic write failed"
+  echo "$ATOMIC_OUT"
+  exit 9
+fi
+
+# ---------------------------------------------------------------------------
+# 10. handleCallback toggle-echo — stub a
+#     TelegramSectionCallbackContext with action="toggle-echo",
+#     call the section's settings.handleCallback, assert
+#     answerCallback was called, ctx.edit was called with the
+#     new view (per docs/sections.md §8 re-render discipline),
+#     and loadEchoConfig shows showTranscript flipped.
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 10/13 — section toggle-echo handler (with ctx.edit re-render)"
+
+TOGGLE_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" REPO_ROOT="$REPO_ROOT" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { saveEchoConfig, loadEchoConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const sections = [];
+const registry = {
+  register(section) {
+    sections.push({ registration: section, token: 'tok0' });
+    return () => {};
+  },
+  getSections() { return sections.slice(); },
+  getByToken(token) { return sections[0]; },
+};
+globalThis['__piTelegramSectionRegistry__'] = registry;
+globalThis['__piTelegramSttProviderRegistry__'] = {
+  providers: new Map([
+    ['pi-openai-stt', { id: 'pi-openai-stt', label: '🟢 OpenAI', transcribe: async () => '' }],
+  ]),
+};
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-stt-toggle-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-stt': { showTranscript: true, stt_provider: 'pi-openai-stt' } },
+}, null, 2));
+
+const handlers = {};
+const pi = { on: (event, h) => { handlers[event] = h; } };
+const sectionMod = jiti(process.env.PKG_DIR + '/section.ts');
+sectionMod.default(pi);
+// Drive session_start to actually register the section
+// (the factory defers registerTelegramSection to session_start
+// per the v0.2.0 plan's Module-load safety).
+handlers['session_start']();
+const section = sections[0].registration;
+
+const stub = {
+  sectionId: 'pi-telegram-stt',
+  chatId: 12345,
+  messageId: 99,
+  action: 'toggle-echo',
+  payload: '',
+  calls: { answer: '', edit: null },
+  async answerCallback(text) { this.calls.answer = text; },
+  async edit(view) { this.calls.edit = view; },
+  async open() {},
+  enqueuePrompt() {},
+  callbackData(action, payload) { return 'section:tok0:' + action + (payload ? ':' + payload : ''); },
+  deleteMessage() {},
+};
+
+(async () => {
+  const result = await section.settings.handleCallback(stub);
+  if (result !== 'handled') { console.error('handleCallback returned', result); process.exit(1); }
+  if (!stub.calls.answer.includes('OFF')) { console.error('answerCallback text =', stub.calls.answer); process.exit(1); }
+  if (!stub.calls.edit) { console.error('edit was not called (the audit found this was a stale-UI bug — ctx.edit must re-render the settings card)'); process.exit(1); }
+  if (!stub.calls.edit.text.includes('STT settings')) { console.error('edit view text =', stub.calls.edit.text); process.exit(1); }
+  if (!stub.calls.edit.text.includes('⚫️ off')) { console.error('edit view does not show new state (⚫️ off):', stub.calls.edit.text); process.exit(1); }
+
+  const cfg = loadEchoConfig();
+  if (cfg.showTranscript !== false) { console.error('showTranscript =', cfg.showTranscript, '(expected false after toggle)'); process.exit(1); }
+  console.log('handleCallback returned: handled');
+  console.log('answerCallback: \"' + stub.calls.answer + '\"');
+  console.log('edit: view.text contains STT settings and off state');
+  console.log('loadEchoConfig().showTranscript =', cfg.showTranscript);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+})().catch(e => { console.error('threw:', e.message); process.exit(1); });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "section.handleCallback('toggle-echo') flips state, calls answerCallback + edit"
+else
+  fail "handleCallback toggle-echo check failed"
+  echo "$TOGGLE_OUT"
+  exit 10
+fi
+
+# ---------------------------------------------------------------------------
+# 11. handleCallback select-provider — stub a list of providers,
+#     call with action="select-provider", payload="pi-other-stt",
+#     assert the new provider is selected + ctx.edit re-renders
+#     with the ✓ on the new row.
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 11/13 — section select-provider handler (with ctx.edit re-render)"
+
+SELECT_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" REPO_ROOT="$REPO_ROOT" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadEchoConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const sections = [];
+const registry = {
+  register(section) {
+    sections.push({ registration: section, token: 'tok0' });
+    return () => {};
+  },
+  getSections() { return sections.slice(); },
+};
+globalThis['__piTelegramSectionRegistry__'] = registry;
+globalThis['__piTelegramSttProviderRegistry__'] = {
+  providers: new Map([
+    ['pi-openai-stt', { id: 'pi-openai-stt', label: '🟢 OpenAI', transcribe: async () => '' }],
+    ['pi-other-stt', { id: 'pi-other-stt', label: '🟡 Other', transcribe: async () => '' }],
+  ]),
+};
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-stt-select-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-stt': { showTranscript: true, stt_provider: 'pi-openai-stt' } },
+}, null, 2));
+
+const handlers = {};
+const pi = { on: (event, h) => { handlers[event] = h; } };
+const sectionMod = jiti(process.env.PKG_DIR + '/section.ts');
+sectionMod.default(pi);
+// Drive session_start to actually register the section
+// (the factory defers registerTelegramSection to session_start
+// per the v0.2.0 plan's Module-load safety).
+handlers['session_start']();
+const section = sections[0].registration;
+
+const stub = {
+  sectionId: 'pi-telegram-stt',
+  chatId: 12345,
+  messageId: 99,
+  action: 'select-provider',
+  payload: 'pi-other-stt',
+  calls: { answer: '', edit: null },
+  async answerCallback(text) { this.calls.answer = text; },
+  async edit(view) { this.calls.edit = view; },
+  async open() {},
+  enqueuePrompt() {},
+  callbackData(action, payload) { return 'section:tok0:' + action + (payload ? ':' + payload : ''); },
+  deleteMessage() {},
+};
+
+(async () => {
+  const result = await section.settings.handleCallback(stub);
+  if (result !== 'handled') { console.error('handleCallback returned', result); process.exit(1); }
+  if (!stub.calls.answer.includes('pi-other-stt')) { console.error('answerCallback text =', stub.calls.answer); process.exit(1); }
+  if (!stub.calls.edit) { console.error('edit was not called'); process.exit(1); }
+  if (!stub.calls.edit.text.includes('pi-other-stt')) { console.error('edit view does not include new provider:', stub.calls.edit.text); process.exit(1); }
+
+  const cfg = loadEchoConfig();
+  if (cfg.stt_provider !== 'pi-other-stt') { console.error('stt_provider =', cfg.stt_provider); process.exit(1); }
+  console.log('handleCallback returned: handled');
+  console.log('answerCallback: \"' + stub.calls.answer + '\"');
+  console.log('edit: view.text includes new provider \"pi-other-stt\"');
+  console.log('loadEchoConfig().stt_provider =', cfg.stt_provider);
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+})().catch(e => { console.error('threw:', e.message); process.exit(1); });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "section.handleCallback('select-provider') flips stt_provider, calls answerCallback + edit"
+else
+  fail "handleCallback select-provider check failed"
+  echo "$SELECT_OUT"
+  exit 11
+fi
+
+# ---------------------------------------------------------------------------
+# 12. handleCallback select-provider "not installed" — when the
+#     payload is a provider id that's not in listSttProviders(),
+#     the section must NOT mutate the config; it must
+#     answerCallback with the "not installed" message and return
+#     "handled" (no ctx.edit since state didn't change).
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 12/13 — section select-provider \"not installed\" error path"
+
+NOT_INSTALLED_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" REPO_ROOT="$REPO_ROOT" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+
+const { loadEchoConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+
+const sections = [];
+const registry = {
+  register(section) { sections.push({ registration: section, token: 'tok0' }); return () => {}; },
+  getSections() { return sections.slice(); },
+};
+globalThis['__piTelegramSectionRegistry__'] = registry;
+// Only pi-openai-stt is installed.
+globalThis['__piTelegramSttProviderRegistry__'] = {
+  providers: new Map([
+    ['pi-openai-stt', { id: 'pi-openai-stt', label: '🟢 OpenAI', transcribe: async () => '' }],
+  ]),
+};
+
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-stt-notinst-'));
+process.env.PI_CODING_AGENT_DIR = tmpDir;
+fs.writeFileSync(path.join(tmpDir, 'telegram.json'), JSON.stringify({
+  extensions: { 'pi-telegram-stt': { showTranscript: true, stt_provider: 'pi-openai-stt' } },
+}, null, 2));
+
+const handlers = {};
+const pi = { on: (event, h) => { handlers[event] = h; } };
+const sectionMod = jiti(process.env.PKG_DIR + '/section.ts');
+sectionMod.default(pi);
+// Drive session_start to actually register the section
+// (the factory defers registerTelegramSection to session_start
+// per the v0.2.0 plan's Module-load safety).
+handlers['session_start']();
+const section = sections[0].registration;
+
+const stub = {
+  sectionId: 'pi-telegram-stt', chatId: 12345, messageId: 99,
+  action: 'select-provider', payload: 'pi-not-installed',
+  calls: { answer: '', edit: null },
+  async answerCallback(text) { this.calls.answer = text; },
+  async edit(view) { this.calls.edit = view; },
+  async open() {}, enqueuePrompt() {},
+  callbackData(action, payload) { return 'section:tok0:' + action + (payload ? ':' + payload : ''); },
+  deleteMessage() {},
+};
+
+(async () => {
+  const result = await section.settings.handleCallback(stub);
+  if (result !== 'handled') { console.error('handleCallback returned', result); process.exit(1); }
+  if (!stub.calls.answer.includes('not installed')) { console.error('answerCallback text =', stub.calls.answer); process.exit(1); }
+  if (stub.calls.edit) { console.error('edit was called (should NOT re-render since state did not change)'); process.exit(1); }
+
+  const cfg = loadEchoConfig();
+  if (cfg.stt_provider !== 'pi-openai-stt') { console.error('stt_provider was overwritten to', cfg.stt_provider); process.exit(1); }
+  console.log('handleCallback returned: handled (no-op state)');
+  console.log('answerCallback: \"' + stub.calls.answer + '\"');
+  console.log('edit: NOT called (state did not change)');
+  console.log('loadEchoConfig().stt_provider =', cfg.stt_provider, '(unchanged)');
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+})().catch(e => { console.error('threw:', e.message); process.exit(1); });
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "section.handleCallback('select-provider', 'not installed') returns 'not installed' popup, no state change, no edit"
+else
+  fail "handleCallback select-provider not-installed check failed"
+  echo "$NOT_INSTALLED_OUT"
+  exit 12
+fi
+
+# ---------------------------------------------------------------------------
+# 13. echoSectionLabel — the 2 reachable (showTranscript) shapes.
+#     (Unlike pi-telegram-tts's 4-shape contract, the echo
+#     section's label always includes the configured
+#     `stt_provider`, so only 2 reachable shapes: on / off.)
+# ---------------------------------------------------------------------------
+hr
+echo "pi-telegram-stt-smoke-test: stage 13/13 — 2 reachable echoSectionLabel shapes"
+
+LABEL_OUT=$(JITI_PATH="$JITI_PATH" PKG_DIR="$PKG_DIR" node -e "
+const jitiModule = require(process.env.JITI_PATH);
+const createJiti = jitiModule.default || jitiModule;
+const jiti = createJiti(process.env.PKG_DIR, { esmResolve: true, interopDefault: true });
+
+const { echoSectionLabel } = jiti(process.env.PKG_DIR + '/section.ts');
+
+const cases = [
+  { name: 'showTranscript=true,  stt_provider=pi-openai-stt', cfg: { showTranscript: true,  stt_provider: 'pi-openai-stt' }, want: '🟢 STT · pi-openai-stt' },
+  { name: 'showTranscript=false, stt_provider=pi-openai-stt', cfg: { showTranscript: false, stt_provider: 'pi-openai-stt' }, want: '⚫️ STT · pi-openai-stt' },
+];
+let failed = 0;
+for (const c of cases) {
+  const got = echoSectionLabel(c.cfg);
+  if (got !== c.want) {
+    console.error('  ' + c.name + ': got \"' + got + '\" want \"' + c.want + '\"');
+    failed++;
+  } else {
+    console.log('  ' + c.name + ': \"' + got + '\" ✓');
+  }
+}
+if (failed) process.exit(1);
+" 2>&1)
+if [[ $? -eq 0 ]]; then
+  ok "echoSectionLabel returns the 2 reachable (showTranscript) labels"
+else
+  fail "echoSectionLabel shape check failed"
+  echo "$LABEL_OUT"
+  exit 13
 fi
 
 # ---------------------------------------------------------------------------
