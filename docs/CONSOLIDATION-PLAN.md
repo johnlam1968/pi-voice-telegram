@@ -251,12 +251,20 @@ After both releases (Phase 2 + Phase 3), restart `pi` with the new packages and 
 
 | Test | What it verifies |
 |---|---|
-| Voice message → STT (now in `pi-telegram-stt`, the in-package OpenAI client) → agent → TTS (now in `pi-telegram-tts` with bundled scripts) → voice reply with caption | The new architecture works end-to-end |
+| Voice message → STT (now in `pi-telegram-tt`, the in-package OpenAI client) → agent → TTS (now in `pi-telegram-tts` with bundled scripts) → voice reply with caption | The new architecture works end-to-end |
 | `base_url` config moved from `pi-openai-stt` to `pi-telegram-stt` block | The new config shape is read correctly |
 | `tts-minimax` / `tts-openai` bins work on PATH (smoke stage 14) | The bundled scripts are callable by name |
 | `pi install npm:pi-telegram-tts@0.2.0` test in a separate `~/.pi/agent/npm-test/` dir | The bin field actually exposes the scripts on PATH after npm install |
 
 If the live test fails, add a row to the relevant matrix + a fix scope (per the AGENTS.md "second gap caught" precedent from the v0.1.0 session).
+
+### Live-test observations (post-v0.8.1 / v0.2.0)
+
+| Date | Observation | Status | Tracking |
+|---|---|---|---|
+| 2026-08-23 | `voice.sendTranscript` is not exposed in any Telegram UI (no main-menu toggle, no setter API). Operators can only edit the field by manually editing `telegram.json`. **Upstream bridge gap, not a regression** — the field is read by the synthesis provider (`getTelegramVoiceSendTranscript()`) but the bridge doesn't ship a setter or main-menu UI for it. | Deferred (upstream) | [llblab/pi-telegram#235](https://github.com/llblab/pi-telegram/issues/235). Workaround (if needed in our extensions before the bridge ships a fix): write `voice.sendTranscript` directly to `telegram.json` via a file-write helper, atomic temp+rename (same pattern as `saveEchoConfig`). The bridge's config hot-reload picks it up. |
+| 2026-08-23 | First live test attempt (at 19:52:32 EDT) failed with `every voice synthesis provider failed`. Subsequent attempts (19:54, 19:58, 19:59) succeeded with valid OGG outputs. | Transient first-run issue, no code fix needed | The new code works correctly; the first-run failure was likely a race condition during the new pi's first session. Smoke test stage 6 (full mode) passes consistently. |
+| 2026-08-23 | `mmx-tts-smoke-test.sh:213` references `$(dirname "$0")/tts-minimax.mjs` which resolves to `scripts/tts-minimax.mjs` (does not exist since the v0.19.0 split moved the script to `extensions/pi-voice-telegram-scripts/`, and again in v0.2.0 to `extensions/pi-telegram-tts/`). | Pre-existing bug, separate from the consolidation | Tracked for a future fix; the script is broken pre- and post-consolidation. Not blocking — the in-package TTS path (`pi-telegram-tts` synthesis provider) doesn't use this script directly. |
 
 ---
 
