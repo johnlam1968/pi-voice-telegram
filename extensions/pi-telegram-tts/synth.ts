@@ -238,7 +238,7 @@ export async function synthesizeOgg(
 			FFMPEG_TIMEOUT_MS,
 		);
 
-		// Cleanup the intermediate MP3. (v0.5.0 will also schedule
+		// Cleanup the intermediate MP3. (v0.7.0 will also schedule
 		// `unlink(ogg)` 30s after upload; see Gotcha #3 in the design doc.)
 		await unlink(mp3).catch(() => {});
 

@@ -596,7 +596,7 @@ export async function synthesizeOgg(
       FFMPEG_TIMEOUT_MS,
     );
 
-    // Cleanup the intermediate MP3. (v0.5.0 will also schedule
+    // Cleanup the intermediate MP3. (v0.7.0 will also schedule
     // `unlink(ogg)` 30s after upload; see Gotcha #3.)
     await unlink(mp3).catch(() => {});
 
@@ -752,7 +752,7 @@ The README in v0.1.0 documents these three options.
    transcript generator. The bridge calls `provider.synthesize(text)`;
    the `transcriptText` is just `text` (echoed back).
 
-3. **Temp files need cleanup (deferred to v0.5.0).** The bridge's
+3. **Temp files need cleanup (deferred to v0.7.0).** The bridge's
    `lib/outbound-voice.ts:271-275` only unlinks the provider's file
    if the result was a different file than the input. We return a
    fresh OGG, so the bridge doesn't clean it up. v0.1.0 has no
@@ -918,7 +918,7 @@ to fire, you must replace (option 1).
   `telegram.json`. v0.3.0 expands to per-provider sub-blocks.
 - **UI-driven config** — voice / model editable from Telegram. v0.4.0.
 - **Temp-file cleanup** — the OGG produced by the provider lingers
-  in `<tmp>/` after upload. v0.5.0 schedules `unlink` 30s after upload.
+  in `<tmp>/` after upload. v0.7.0 schedules `unlink` 30s after upload.
 
 ## Diagnostics
 

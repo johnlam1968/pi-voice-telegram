@@ -95,6 +95,13 @@ The npm package `pi-openai-stt` is deprecated; `npm install pi-openai-stt` will 
 > tool calls. The hot-reload watcher still picks up edits in
 > ~200ms; just edit and save.
 
+> **v0.11.0:** the in-package `saveEchoConfig` writer was
+> dropped. Same design rule as v0.10.0: `telegram.json` is the
+> single source of truth, edited by the operator or the agent
+> via filesystem tools, picked up live by the 200ms hot-reload
+> watcher. The `loadEchoConfig` reader stays because it's the
+> extension's own config interface at call time.
+
 ## Provider contract (for future backends)
 
 The `SttProvider` interface in `./stt-provider.ts` is a private in-package seam. For a new backend (e.g. a non-OpenAI speech model), add a `stt-<backend>.ts` file in this package and register it at module load in `index.ts`:

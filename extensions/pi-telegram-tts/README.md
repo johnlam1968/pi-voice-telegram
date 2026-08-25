@@ -155,9 +155,10 @@ per-key, not wholesale:
 
 Existing v0.1.0 / v0.2.0 configs keep working unchanged. v0.3.0
 adds the sub-block; the top-level `voice` / `model` keep working as
-fallback. v0.4.0 will mark them as `> Deprecated: use the
-per-provider sub-block instead`; they remain supported through
-v0.5.0 and will be removed in v1.0.
+fallback. The v0.6.0 schema.json description already notes the
+future deprecation (`> Deprecated: use the per-provider sub-block
+instead`); they remain supported through v0.6.0 and will be
+removed in v1.0.
 
 ### Available sub-block fields
 
@@ -254,7 +255,7 @@ synthesis providers. Our provider is tier 3.
 > re-implements the v0.1.0 `sendTranscript: true` behavior at the
 > extension level via the new `composeWithText` config (see below).
 
-## v0.2.0 / v0.4.0 capabilities
+## v0.2.0 / v0.4.0 / v0.6.0 capabilities
 
 - `getVoicePromptContribution(view)` adds `[tts] Reply briefly; this
   turn will be spoken aloud via the configured TTS provider.` to
@@ -266,6 +267,15 @@ synthesis providers. Our provider is tier 3.
   was more trouble than the `telegram.json`-driven config. All
   config is via `telegram.json`. The v0.2.0/v0.4.0 section work is
   preserved in git history for reference.
+- **v0.6.0:** the in-package `saveSynthConfig` writer and
+  `loadTelegramConfig` reader were both dropped. Per the
+  operator's design rule: every config knob lives in
+  `telegram.json`, edited by the operator or the agent via
+  filesystem tools, picked up live by the 200ms hot-reload
+  watcher. The in-package `loadSynthConfig` reader stays because
+  it's the extension's own config interface at call time — the
+  agent's `read` tool is the surface for operator / agent
+  inspection, not the extension's runtime path.
 
 ## v0.4.0 stage 1 — text+voice composition
 
@@ -299,7 +309,9 @@ When set to `"auto"`, the provider:
 
 The user sees: **text message** (immediately) → **voice message** (a
 moment later, after the TTS script + ffmpeg). Default is `"off"`
-(voice only). The toggle UI for this field is v0.4.0 stage 2.
+(voice only). Edit `telegram.json` directly to switch — the
+200ms hot-reload watcher picks up the change on the next
+voice-tagged turn.
 - Bundled `tts-minimax.mjs` + `tts-openai.mjs` scripts on PATH via
   the package's `bin` field.
 
@@ -311,10 +323,13 @@ moment later, after the TTS script + ffmpeg). Default is `"off"`
   setups; the v0.2.0 + v0.4.0 section work was dropped on
   2026-08-24).
 - **Top-level `voice` / `model` deprecation** — they keep working
-  through v0.5.0; v0.4.0 will mark them `> Deprecated: use the
-  per-provider sub-block instead`. Removal is targeted for v1.0.
+  through v0.6.0; the v0.6.0 schema.json description already notes
+  the future deprecation (`> Deprecated: use the per-provider
+  sub-block instead`), but the actual schema-level deprecation
+  marker is still a planned future change. Removal is targeted
+  for v1.0.
 - **Temp-file cleanup** — the OGG produced by the provider lingers
-  in `<tmp>/` after upload. v0.5.0 schedules `unlink` 30s after
+  in `<tmp>/` after upload. v0.7.0 schedules `unlink` 30s after
   upload.
 
 ## Diagnostics
@@ -328,11 +343,11 @@ moment later, after the TTS script + ffmpeg). Default is `"off"`
   `pi-telegram-tts/synth`. Visible in the bridge's `telegram-status`
   if a voice message fires while mis-configured.
 - **Smoke test** — `bash scripts/pi-telegram-tts-smoke-test.sh`
-  (from the repo root) replays all 14 v0.2.0 acceptance stages in
-  ~5s without needing the agent, the bridge, or Telegram. Use
-  `--no-network` to skip the live TTS round-trip in CI / offline.
-  See `scripts/pi-telegram-tts-smoke-test.sh` for the full
-  recipe.
+  (from the repo root) replays all 16 v0.4.0/v0.6.0 acceptance
+  stages in ~5s without needing the agent, the bridge, or
+  Telegram. Use `--no-network` to skip the live TTS round-trip in
+  CI / offline. See `scripts/pi-telegram-tts-smoke-test.sh` for
+  the full recipe.
 
 ## License
 

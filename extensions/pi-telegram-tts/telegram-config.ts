@@ -1,5 +1,5 @@
 /**
- * telegram-config.ts — read/write this extension's key in telegram.json.
+ * telegram-config.ts — read this extension's key in telegram.json.
  *
  * Persistence: `telegram.json` under `extensions["pi-telegram-tts"]`.
  *
@@ -12,12 +12,18 @@
  * checks for `provider` in `synthesizeOgg` and returns `undefined`
  * (the bridge falls through to `outboundHandlers[0].template`).
  *
- * v0.2.0 added `saveSynthConfig` (atomic temp+rename, same pattern
- * as `pi-telegram-stt/telegram-config.ts:174-202`) for the section UI.
- * v0.4.0 extends the same writer with the new `composeWithText` key.
+ * **v0.6.0:** the in-package writer (`saveSynthConfig`) and the
+ * `loadTelegramConfig` helper (which read the full `telegram.json`
+ * for the section's read-only display) were both dropped. The
+ * operator or agent edits `telegram.json` directly via filesystem
+ * tools; the 200ms hot-reload watcher picks up the change. The
+ * in-package readers stay because they're the extension's own
+ * config interface at call time — the agent's `read` tool is the
+ * surface for operator / agent inspection, not the extension's
+ * runtime path.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -134,78 +140,4 @@ export function loadSynthConfig(): SynthConfig {
 	} catch {
 		return structuredClone(DEFAULTS);
 	}
-}
-
-/**
- * Read the full `telegram.json` as a parsed object. Used by the
- * smoke test to verify that `saveSynthConfig` preserves other
- * extension blocks + the bridge-owned `voice` block. Returns
- * `{}` on missing file, parse error, or any failure.
- */
-export function loadTelegramConfig(): Record<string, unknown> {
-	const path = configPath();
-	if (!existsSync(path)) return {};
-	try {
-		const raw = readFileSync(path, "utf8");
-		const parsed = JSON.parse(raw);
-		if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-			return parsed as Record<string, unknown>;
-		}
-		return {};
-	} catch {
-		return {};
-	}
-}
-
-/**
- * v0.2.0 — atomic write of the `extensions["pi-telegram-tts"]`
- * block. The section UI's `toggle-disabled` handler calls this on
- * every click. The writer:
- *
- *   1. Reads the full `telegram.json` (preserves the
- *      `extensions["pi-telegram-tt"]` block, the bridge-owned
- *      `voice` block, and any other extension blocks).
- *   2. Replaces ONLY the `extensions["pi-telegram-tts"]` block
- *      with the v0.2.0+v0.3.0+v0.4.0 7-field `SynthConfig` shape.
- *      `undefined` fields are dropped from the serialized output
- *      (so the section toggling `disabled` doesn't also write
- *      `provider: undefined` over an existing provider).
- *   3. Writes to a `.tmp` file with mode 0o600, then renames
- *      atomically. The bridge reads `telegram.json` on every call,
- *      so a partial write would be observed mid-flight.
- */
-export function saveSynthConfig(cfg: SynthConfig): void {
-	const path = configPath();
-	let parsed: Record<string, unknown> = {};
-	if (existsSync(path)) {
-		try {
-			parsed = JSON.parse(readFileSync(path, "utf8")) as Record<
-				string,
-				unknown
-			>;
-		} catch {
-			parsed = {};
-		}
-	}
-	const extensions = (parsed.extensions ?? {}) as Record<string, unknown>;
-	const out: Record<string, unknown> = {
-		disabled: cfg.disabled,
-		provider: cfg.provider,
-		voice: cfg.voice,
-		model: cfg.model,
-		minimax: cfg.minimax,
-		openai: cfg.openai,
-		composeWithText: cfg.composeWithText,
-	};
-	for (const k of Object.keys(out)) {
-		if (out[k] === undefined) delete out[k];
-	}
-	extensions[KEY] = out;
-	parsed.extensions = extensions;
-	const tempPath = path + ".tmp";
-	writeFileSync(tempPath, JSON.stringify(parsed, null, 2) + "\n", {
-		encoding: "utf8",
-		mode: 0o600,
-	});
-	renameSync(tempPath, path);
 }

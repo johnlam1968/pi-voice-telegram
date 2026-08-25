@@ -2,7 +2,7 @@
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
 	"$id": "https://raw.githubusercontent.com/johnlam1968/pi-voice-telegram/main/extensions/pi-telegram-tts/schema.json",
 	"title": "pi-telegram-tts sub-block (v0.3.0)",
-	"description": "Per-provider TTS sub-block inside `telegram.json#extensions[\"pi-telegram-tts\"]`. The v0.3.0 design lets every CLI arg the bundled tts-*.mjs scripts support be reachable from this JSON object — no template editing required. The provider writes the sub-block (with v0.1.0 top-level `voice` / `model` as fallbacks) to a tempfile and passes `--config <path>` to the script. Resolution order per field: sub-block field > top-level field > script's hardcoded DEFAULTS. Live edits take effect on the next voice-tagged turn (the provider re-reads config on every call, no restart needed).\n\nThe schema is the canonical reference for the v0.3.0 surface and is consumed by:\n  - VS Code / IntelliJ for inline validation when the user adds `\"$schema\": \"...\"` to telegram.json\n  - the v0.4.0 section UI's form generator (planned)\n  - the v0.4.0 `applyInstallDefaults()` writer (planned)\n\nVersion: 1 (the v0.4.0 `loadTelegramConfig()` runs the migration if it sees a stale version).",
+	"description": "Per-provider TTS sub-block inside `telegram.json#extensions[\"pi-telegram-tts\"]`. The v0.3.0 design lets every CLI arg the bundled tts-*.mjs scripts support be reachable from this JSON object — no template editing required. The provider writes the sub-block (with v0.1.0 top-level `voice` / `model` as fallbacks) to a tempfile and passes `--config <path>` to the script. Resolution order per field: sub-block field > top-level field > script's hardcoded DEFAULTS. Live edits take effect on the next voice-tagged turn (the provider re-reads config on every call, no restart needed).\n\nThe schema is the canonical reference for the v0.3.0 surface and is consumed by:\n  - VS Code / IntelliJ for inline validation when the user adds `\"$schema\": \"...\"` to telegram.json\n  - (v0.6.0:) the operator or agent edits `telegram.json` directly via filesystem tools; the 200ms hot-reload watcher picks up the change. There is no longer a form-driven UI or an in-package config writer — the agent's own `read`/`write` tools are the canonical surface.\n\nVersion: 1 (no migration needed; the v0.3.0 reader accepts all earlier shapes).",
 	"type": "object",
 	"additionalProperties": false,
 	"required": ["provider"],
@@ -10,7 +10,7 @@
 		"disabled": {
 			"type": "boolean",
 			"default": false,
-			"description": "Master switch. When true, the provider returns `undefined` and the bridge falls through to `outboundHandlers[0].template`. The v0.2.0 section UI toggles this; v0.3.0+ can also flip it manually here."
+			"description": "Master switch. When true, the provider returns `undefined` and the bridge falls through to `outboundHandlers[0].template`. The operator or agent edits this directly in `telegram.json`; the 200ms hot-reload watcher picks up the change on the next voice-tagged turn."
 		},
 		"provider": {
 			"type": "string",

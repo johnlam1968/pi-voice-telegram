@@ -8,19 +8,15 @@
  * v0.2.0 — `tts-*.mjs` scripts bundled into this package (was a
  *           separate `pi-voice-telegram-scripts` peer-dep, now
  *           deprecated). The `bin` field exposes both on PATH.
- *           Adds the `/telegram-settings` Section UI: enable /
- *           disable toggle, dynamic getLabel(), atomic
- *           `saveSynthConfig` writer. The section file
- *           (`section.ts`) was DROPPED on 2026-08-24 per the
- *           operator's request (drop the UI for tts completely) —
- *           all config is via `telegram.json`. The v0.2.0/v0.4.0
+ *           The v0.2.0 `/telegram-settings` Section UI was
+ *           DROPPED on 2026-08-24 per the operator's request —
+ *           all config is via `telegram.json`. The v0.2.0
  *           section work is preserved in git history for reference.
  * v0.3.0 — per-provider sub-block config (`minimax: {…}` /
  *           `openai: {…}`) makes every CLI arg the script supports
  *           reachable from `telegram.json`. `synth.ts` writes the
  *           sub-block to a tempfile and passes `--config <path>`;
- *           the script's own deep-merge handles the rest. No
- *           changes to the `.mjs` scripts.
+ *           the script's own deep-merge handles the rest.
  * v0.4.0 — upstream `@llblab/pi-telegram@0.39.0` removed the
  *           `voice.sendTranscript` config + the
  *           `getTelegramVoiceSendTranscript()` helper + the
@@ -37,26 +33,22 @@
  *           the provider sends a text message with the same content
  *           as the voice, just before returning the OGG path. The
  *           user sees text first, then voice. Driven entirely by
- *           `telegram.json` — no upstream dependency. **Stage 2**
- *           adds the form-driven UI on top (per-provider sub-views
- *           + save dialog + `applyInstallDefaults()`).
+ *           `telegram.json` — no upstream dependency.
+ * v0.6.0 — the in-package `saveSynthConfig` writer + the
+ *           `loadTelegramConfig` reader were dropped. Per the
+ *           operator's design rule: every config knob lives in
+ *           `telegram.json`, edited by the operator or the agent
+ *           via filesystem tools, picked up live by the 200ms
+ *           hot-reload watcher. The in-package readers stay
+ *           because they're the extension's own config interface
+ *           at call time. (The form-driven section UI was already
+ *           dropped in v0.4.0 per the 2026-08-24 directive.)
  *
  * Public APIs used (all stable per @llblab/pi-telegram):
  *   - `@llblab/pi-telegram/voice`    → registerTelegramVoiceSynthesisProvider
  *   - `@llblab/pi-telegram/outbound` → recordTelegramRuntimeEvent
  *   - `@llblab/pi-telegram/delivery` → sendTelegramView
  *                                       (v0.4.0 stage 1: text+voice composition)
- *   - `@llblab/pi-telegram/sections` → registerTelegramSection
- *                                       (v0.2.0; main menu + settings
- *                                       submenu for the disable toggle)
- *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
- *
- * Public APIs used (all stable per @llblab/pi-telegram):
- *   - `@llblab/pi-telegram/voice`    → registerTelegramVoiceSynthesisProvider
- *   - `@llblab/pi-telegram/outbound` → recordTelegramRuntimeEvent
- *   - `@llblab/pi-telegram/sections` → registerTelegramSection
- *                                       (v0.2.0; main menu + settings
- *                                       submenu for the disable toggle)
  *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
  *
  * Required host-side runtime (NOT bundled):
@@ -268,11 +260,13 @@ try {
 export default function piTelegramTts(pi: ExtensionAPI): void {
 	const disposers: Array<() => void> = [];
 
-	// v0.2.0 section UI was dropped on 2026-08-24 per the operator's
+	// v0.4.0 section UI was dropped on 2026-08-24 per the operator's
 	// request — the form-driven UI was more trouble than the
-	// telegram.json-driven config. All config is via telegram.json
-	// (see README.md "telegram.json-driven config" + the plan doc
-	// v0.5.0 entry for the rationale).
+	// telegram.json-driven config. v0.6.0 also dropped the
+	// in-package `saveSynthConfig` writer + `loadTelegramConfig`
+	// reader. All config is via telegram.json (see README.md
+	// "telegram.json-driven config" + the plan doc v0.6.0 entry
+	// for the rationale).
 
 	// Re-register on session_start (idempotent; the try above handles
 	// duplicate-id on first load). The session_start registration's

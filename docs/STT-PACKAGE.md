@@ -55,6 +55,27 @@ declares the npm metadata.
 
 ## 3. Version history
 
+### v0.11.0 (2026-08-24) — drop the in-package config writer
+- **`saveEchoConfig` deleted.** Per the operator's design rule
+  (every config knob lives in `telegram.json`, edited by the
+  operator or agent via filesystem tools, picked up live by
+  the 200ms hot-reload watcher): the in-package atomic-write
+  helper is no longer needed. The agent's own `read`/`write`
+  tools are the canonical surface. The sister tts package made
+  the same call in its v0.6.0 release
+- `telegram-config.ts` shrunk to a pure reader: `loadEchoConfig()`
+  + the `EchoConfig` interface + the `DEFAULTS` constant. The
+  `writeFileSync` + `renameSync` imports were dropped
+- **Smoke unchanged** (7 stages, 0 → 7). The writer was never
+  exercised by the smoke (it was section-UI code)
+- The `EchoConfig` type stays exported; it's the package's
+  internal config interface at call time
+- The drop is internal: `saveEchoConfig` was an internal export
+  not advertised in the README. No public API surface change
+- The pre-v0.11.0 `saveEchoConfig` body (atomic temp+rename,
+  preserving other `extensions` blocks + the bridge-owned
+  `voice` block) is preserved in git history for reference
+
 ### v0.10.0 (2026-08-24) — drop the section UI
 - **`section.ts` deleted.** The `/telegram-settings` → 🎙️ STT
   section was removed per the operator's 2026-08-24 directive
@@ -150,7 +171,7 @@ declares the npm metadata.
   during the migration window; the fallback is removed in v0.8.1
   (the user is the only operator and migrated)
 
-### v0.5.0 — retire `pi-whisper-stt`
+### v0.6.0 — retire `pi-whisper-stt`
 - The default `stt_provider` flipped from `"pi-whisper-stt"` to
   `"pi-openai-stt"`
 - `pi-whisper-stt` covered every backend via the

@@ -1,12 +1,19 @@
 /**
- * telegram-config.ts — read/write this extension's key in `telegram.json`.
+ * telegram-config.ts — read this extension's key in `telegram.json`.
+ *
+ * **v0.11.0:** the in-package writer (`saveEchoConfig`) was
+ * dropped. The operator or agent edits `telegram.json` directly
+ * via filesystem tools; the 200ms hot-reload watcher picks up
+ * the change. There is no longer a need for an atomic-write
+ * helper in this package — the agent's own `read`/`write` tools
+ * are the canonical surface.
  *
  * The full shape, the v0.8.0 subsumption note, and the v0.7.2
  * rename note live in `docs/STT-PACKAGE.md` (this file is the
- * reader + atomic writer, not the design record).
+ * reader, not the design record).
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
@@ -82,36 +89,4 @@ export function loadEchoConfig(): EchoConfig {
 	} catch {
 		return base;
 	}
-}
-
-export function saveEchoConfig(cfg: EchoConfig): void {
-	const path = configPath();
-	let parsed: Record<string, unknown> = {};
-	if (existsSync(path)) {
-		try {
-			parsed = JSON.parse(readFileSync(path, "utf8")) as Record<
-				string,
-				unknown
-			>;
-		} catch {
-			parsed = {};
-		}
-	}
-	const extensions = (parsed.extensions ?? {}) as Record<string, unknown>;
-	const out: Record<string, unknown> = {
-		showTranscript: cfg.showTranscript,
-		stt_provider: cfg.stt_provider,
-	};
-	if (cfg.base_url !== undefined) out.base_url = cfg.base_url;
-	if (cfg.apiKey !== undefined) out.apiKey = cfg.apiKey;
-	extensions[KEY] = out;
-	parsed.extensions = extensions;
-	// Atomic write: temp + rename. The bridge reads `telegram.json`
-	// on every call, so a partial write would be observed mid-flight.
-	const tempPath = path + ".tmp";
-	writeFileSync(tempPath, JSON.stringify(parsed, null, 2) + "\n", {
-		encoding: "utf8",
-		mode: 0o600,
-	});
-	renameSync(tempPath, path);
 }

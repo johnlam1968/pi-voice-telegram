@@ -592,11 +592,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 13-15. v0.3.0 — per-provider sub-block reader + writer
-#      (loadSynthConfig / saveSynthConfig handle a `minimax: { ... }`
+# 13-15. v0.3.0 — per-provider sub-block reader
+#      (loadSynthConfig handles a `minimax: { ... }`
 #      and `openai: { ... }` sub-block under
 #      `extensions["pi-telegram-tts"]`. The script is the runtime
-#      validator; the reader is just the type-guard.)
+#      validator; the reader is just the type-guard. v0.5.0 dropped
+#      the in-package `saveSynthConfig` writer — the operator or
+#      agent edits `telegram.json` directly.)
 # ---------------------------------------------------------------------------
 hr
 echo "pi-telegram-tts-smoke-test: stage 13/16 — v0.3.0 loadSynthConfig().minimax returns the sub-block"
@@ -609,7 +611,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { loadSynthConfig, saveSynthConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
+const { loadSynthConfig } = jiti(process.env.PKG_DIR + '/telegram-config.ts');
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pi-tts-sub-'));
 process.env.PI_CODING_AGENT_DIR = tmpDir;
