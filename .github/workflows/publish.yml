@@ -1,65 +1,3 @@
-# publish.yml — publish the active sister packages to the npm registry,
-# and deprecate the 3 superseded packages (the v0.8.0 / v0.2.0
-# consolidation).
-#
-# Why this exists: as of npm v12, GATs (granular access tokens) with
-# the "bypass 2FA" permission can no longer publish directly. They
-# can only stage a publish (which a maintainer then approves with
-# 2FA interactively) or read private packages. This workflow uses
-# OIDC Trusted Publishing: GitHub Actions issues a short-lived
-# token to npm on each run, no stored secret, no 2FA prompt
-# needed. The OIDC handshake is itself the second factor.
-#
-# The deprecate job applies the same OIDC auth to `npm deprecate`,
-# so the host doesn't need a local npm login to deprecate the 3
-# superseded packages. The messages are idempotent — re-applying
-# them is a no-op. See docs/CONSOLIDATION-PLAN.md Appendix B for
-# the exact messages.
-#
-# Trigger:
-#   - Push of a tag matching v* (the normal flow):
-#       git tag v0.7.0
-#       git push --follow-tags
-#     The tag's version is verified against each package's
-#     package.json before publish.
-#   - workflow_dispatch (manual run):
-#       Use this for the FIRST publish (when the package doesn't
-#       exist on npm yet — you must first create the package via
-#       `npm publish` locally, OR via the npm web UI, OR via
-#       `npm publish --otp <code>` if you have a TOTP generator).
-#       After the first publish, configure Trusted Publishing
-#       on npmjs.com (Package → Settings → Trusted Publishers)
-#       and every subsequent publish is via tag push.
-#
-# Setup (one-time, per package on npmjs.com):
-#   1. Go to https://www.npmjs.com/package/<name>/access
-#   2. "Publishing access" → "Add a trusted publisher"
-#   3. Repository: johnlam1968/pi-voice-telegram
-#      Workflow file: .github/workflows/publish.yml
-#      Environment: (leave blank for now — or set up a
-#                   "production" environment with required
-#                   reviewers for the manual-trigger fallback)
-#   4. Save.
-# Repeat for all 3 packages (pi-voice-telegram-scripts,
-# pi-openai-stt, pi-telegram-stt).
-#
-# Setup (one-time, in this repo's GitHub settings):
-#   None required. The workflow uses OIDC; no secrets to add.
-#   (If you ever fall back to NPM_TOKEN for some reason, add it
-#   as a repository secret under Settings → Secrets.)
-#
-# Setup (one-time, locally):
-#   The very first publish of each package can't use OIDC
-#   trusted publishing — the package has to exist on npm first.
-#   Use one of these bootstrap paths:
-#     a) The npm web UI's "publish" form (drag-and-drop a tarball
-#        built via `npm pack` from each package's directory).
-#     b) `npm publish --otp <6-digit-code>` from any host where
-#        you can read the TOTP code (the publish.sh in this repo
-#        supports this with `--otp` or `NPM_CONFIG_OTP`).
-#   After the first publish, configure trusted publishing on
-#   npm and every subsequent release is a tag push.
-
 name: Publish to npm
 
 on:
@@ -67,38 +5,20 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
-    # Manual trigger for the very first publish (when the packages
-    # don't exist on npm yet and OIDC trusted publishing can't be
-    # configured). After the first publish, switch to tag pushes.
-    # Add an NPM_TOKEN secret to the repo for the first publish:
-    #   1. Go to https://www.npmjs.com/settings/<user>/tokens
-    #   2. Generate a NEW token, "Automation" type, publish scope
-    #      (NOT "bypass 2FA" — that permission is gone as of npm v12)
-    #   3. Add it as a repo secret: gh secret set NPM_TOKEN
-    #   4. Run this workflow via the Actions tab → Publish to npm → Run workflow
-    # After the first publish, configure Trusted Publishing per
-    # package on npmjs.com (Package → Settings → Trusted Publishers)
-    # and the workflow will use OIDC instead — NPM_TOKEN is ignored
-    # once trusted publishing is set.
 
 permissions:
-  contents: write   # for the GitHub Release
-  id-token: write   # for npm OIDC provenance (used after trusted publishing is configured)
+  contents: write
+  id-token: write
 
 jobs:
   publish:
-    name: Publish 4 sister packages
+    name: Publish 2 sister packages
     runs-on: ubuntu-latest
-    # No `environment:` block by default — tag pushes publish
-    # immediately. For an extra gate, set up a GitHub Environment
-    # (Settings → Environments → "production") with required
-    # reviewers and add `environment: production` here.
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
         with:
-          # Fetch full history so the tag's commit SHA is resolvable.
           fetch-depth: 0
 
       - name: Setup Node.js
@@ -109,15 +29,6 @@ jobs:
 
       - name: Print current versions of the active packages
         run: |
-          # The active packages are published at their current versions
-          # — they're independent packages with independent semver.
-          # The tag (if any) is just a release marker, not a
-          # version enforcer.
-          # v0.8.0/v0.2.0 consolidation: 4 → 2 active packages.
-          # - pi-openai-stt was subsumed into pi-telegram-stt (v0.8.0).
-          # - pi-voice-telegram-scripts was subsumed into
-          #   pi-telegram-tts in v0.2.0.
-          # - pi-voice-telegram is deprecated (Phase 1).
           echo "Publishing the active sister packages at their current versions:"
           for pkg in pi-telegram-stt pi-telegram-tts; do
             ver=$(node -p "require('./extensions/${pkg}/package.json').version")
@@ -169,24 +80,3 @@ jobs:
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          # No body — let the auto-generated release notes do the talking.
-          # Future enhancement: include a list of the 3 published packages
-          # with their install commands for end users.
-
-  # NOTE: there is intentionally NO automated `deprecate` job in this
-  # workflow. The v0.8.0 / v0.2.0 consolidation (3 packages deprecated:
-  # pi-voice-telegram@0.16.12, pi-openai-stt, pi-voice-telegram-scripts)
-  # is applied via the npm web UI's "Deprecate package" button. The CLI
-  # auth paths are all blocked:
-  #   - OIDC trusted publishing only covers `npm publish` and
-  #     `npm stage publish`, not `npm deprecate` (npm limitation).
-  #   - The GAT secret (NPM_TOKEN) requires interactive 2FA for
-  #     deprecate, which the TOTP-via-CI attempts rejected
-  #     (EOTP: "typoed it, or it timed out").
-  # The web UI uses the maintainer's browser session, which is
-  # already authenticated and bypasses 2FA. The deprecation message
-  # is npm's default ("Package no longer supported...") — the
-  # maintainer accepts this as a documented gap; the precise text
-  # is less important than the warning itself.
-  # See AGENTS.md "v0.21.0 changelog" and docs/CONSOLIDATION-PLAN.md
-  # for the design history.
