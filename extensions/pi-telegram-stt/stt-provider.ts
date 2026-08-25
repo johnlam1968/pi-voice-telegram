@@ -1,14 +1,8 @@
 /**
- * stt-provider.ts — the STT provider contract + a `globalThis`-backed
- * in-process registry.
- *
- * Any pi extension can implement `SttProvider` and register with
- * `registerSttProvider()` on `session_start` (or at module load for
- * early registration). `echo-handler.ts` looks up the configured
- * provider by `id` at STT call time to avoid load-order coupling.
- *
- * Full design notes (provider list, load-order-race history, the
- * `code: 1|2|3|4` taxonomy) live in `docs/STT-PACKAGE.md`.
+ * stt-provider.ts — the `SttProvider` contract + a `globalThis`-backed
+ * in-process registry. `echo-handler.ts` looks up the configured
+ * provider by `id` at STT call time. Design + `code: 1|2|3|4` error
+ * taxonomy in `docs/STT-PACKAGE.md`.
  */
 
 export interface SttRequest {

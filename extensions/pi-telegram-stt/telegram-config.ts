@@ -1,16 +1,9 @@
 /**
- * telegram-config.ts — read this extension's key in `telegram.json`.
- *
- * **v0.11.0:** the in-package writer (`saveEchoConfig`) was
- * dropped. The operator or agent edits `telegram.json` directly
- * via filesystem tools; the 200ms hot-reload watcher picks up
- * the change. There is no longer a need for an atomic-write
- * helper in this package — the agent's own `read`/`write` tools
- * are the canonical surface.
- *
- * The full shape, the v0.8.0 subsumption note, and the v0.7.2
- * rename note live in `docs/STT-PACKAGE.md` (this file is the
- * reader, not the design record).
+ * telegram-config.ts — read `telegram.json#extensions["pi-telegram-stt"]`.
+ * v0.11.0 dropped the in-package writer (the agent has its own
+ * `read`/`write` tools). v0.8.0 subsumed the OpenAI STT provider;
+ * v0.7.2 renamed `echoEnabled` to `showTranscript`. Design +
+ * version history in `docs/STT-PACKAGE.md`.
  */
 
 import { existsSync, readFileSync } from "node:fs";

@@ -1,20 +1,11 @@
 /**
  * echo-handler.ts — wires the two STT extension points:
- *
- *   1. `registerTelegramUpdateHandler` — stashes the chat ID keyed
- *      by the deterministic `${prefix}-${message_id}${ext}`
- *      filename the bridge will use. The transcription provider
- *      needs the chat ID for the echo, but the provider API
- *      doesn't pass it.
- *   2. `registerTelegramVoiceTranscriptionProvider` — looks up
- *      the configured STT provider in the registry, calls
- *      `provider.transcribe()`, and sends the 🎙️ reply (when
- *      `showTranscript`). Returns the transcript for the bridge
- *      to include in the agent's user message.
- *
- * The full design (the chat-ID-by-filename map, the
- * `recordTelegramRuntimeEvent` categories, the close/cleanup
- * shape) lives in `docs/STT-PACKAGE.md`.
+ * `registerTelegramUpdateHandler` (stashes the chat ID keyed by
+ * filename, since the transcription provider API doesn't pass it) and
+ * `registerTelegramVoiceTranscriptionProvider` (calls
+ * `provider.transcribe()` + sends the show-transcript reply).
+ * Design (chat-ID-by-filename map, runtime event categories, cleanup
+ * shape) in `docs/STT-PACKAGE.md`.
  */
 
 import { sendTelegramView } from "@llblab/pi-telegram/delivery";

@@ -1,19 +1,9 @@
 /**
  * openai-stt — in-process client for the OpenAI `/v1/audio/transcriptions`
- * gateway convention, plus the package's bundled STT provider.
- *
- * Talks to OpenAI's actual API, the local `fw-openai-sts` shim,
- * `faster-whisper-server`, `whisper-asr-webservice`, and any other
- * OpenAI-compatible gateway. The full version history + design
- * + config resolution + error taxonomy live in
- * `docs/STT-PACKAGE.md` (this file is intentionally terse — the
- * implementation is short, the docstring would be longer than the
- * code).
- *
- * Provider registration: `registerOpenAiSttProvider()` is the
- * module-load side effect that puts the provider in the
- * in-process registry before any `session_start` fires (load-
- * order invariant from v0.3.1).
+ * gateway convention, plus the package's bundled STT provider. Talks
+ * to OpenAI, the local `fw-openai-sts` shim, `faster-whisper-server`,
+ * `whisper-asr-webservice`, and any other OpenAI-compatible gateway.
+ * Design + config resolution + error taxonomy in `docs/STT-PACKAGE.md`.
  */
 
 import { existsSync, readFileSync } from "node:fs";

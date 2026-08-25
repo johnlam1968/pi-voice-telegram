@@ -994,3 +994,29 @@ worth a separate §7.x section. The new agent should:
   `getAgentDir()` path-resolution fix
 - `archive/docs/MINIMAX-T2A-FINDINGS.md:72-87` — the documented
   "sendTranscript is dead config" finding that motivates v0.1.0
+
+## 13. Operational notes (v0.7.0+)
+
+**Public APIs used** (all stable per `@llblab/pi-telegram`):
+
+- `@llblab/pi-telegram/voice` → `registerTelegramVoiceSynthesisProvider`
+- `@llblab/pi-telegram/outbound` → `recordTelegramRuntimeEvent`
+- `@llblab/pi-telegram/delivery` → `sendTelegramView` (v0.4.0 stage 1: text+voice composition)
+- `@earendil-works/pi-coding-agent` → `ExtensionAPI`, `getAgentDir`
+
+**Required host-side runtime** (NOT bundled):
+
+- `ffmpeg` on PATH (for MP3 → OGG/Opus conversion)
+- A TTS API key: `MINIMAX_API_KEY` (or `~/.mmx/config.json` with `api_key`) for MiniMax, or `OPENAI_API_KEY` (or `~/.pi/agent/auth.json` with `openai.key`) for OpenAI
+
+**Lifecycle** (the load-order race fix from v0.3.1):
+
+1. **Module load** (top-level side effect): register the provider at the top level. If a voice message arrives before `session_start` fires (rare but possible), the provider is already in the registry.
+2. **`session_start`**: re-register idempotently. The module-load registration is durable; the `session_start` registration's disposer is pushed onto the disposers array.
+3. **`session_shutdown`**: dispose the `session_start` registration. The module-load registration stays for the process lifetime.
+
+**Provider body** (v0.7.0+): hardcoded constants in `synth.ts:MINIMAX_BODY` + `OPENAI_BODY`. The operator's current Cantonese voice settings are baked in (Cantonese_CuteGirl / speed 0.95 / emotion happy / lang Chinese,Yue / modify_intensity 0 / modify_timbre 10). Adjust by editing the constants; the agent can do it via its `edit` tool.
+
+**`telegram.json` surface** (v0.7.0+): 3 fields. `{disabled, provider, composeWithText}`. The per-provider sub-block is gone.
+
+**Config writer**: none. The operator or agent edits `telegram.json` directly; the 200ms hot-reload watcher picks up the change.

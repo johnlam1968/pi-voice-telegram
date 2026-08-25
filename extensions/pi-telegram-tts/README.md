@@ -6,12 +6,15 @@ Unlocks `getVoicePromptContribution` for voice-tagged turns and
 provides a registered synthesis provider tier in the bridge's
 voice-delivery pipeline (`lib/outbound-voice.ts`).
 
-**As of v0.2.0, the `tts-minimax.mjs` and `tts-openai.mjs` scripts are
-bundled inside this package** (previously a separate
-`pi-voice-telegram-scripts` npm package, now deprecated). The package's
-`bin` field exposes both scripts on PATH after `npm install`. Same
-scripts, same auth resolution, same ffmpeg output; the only delta vs
-the v0.1.0 provider is the bundled scripts.
+**v0.7.0** — direct `fetch` to the provider. No bundled scripts, no
+`bin` field, no per-provider sub-block. The LLM's reply is the only
+field interpolated at call time; all other API params (voice, model,
+speed, emotion, sample_rate, etc.) are hardcoded as constants in
+`synth.ts` (`MINIMAX_BODY` / `OPENAI_BODY`). The operator's current
+Cantonese voice settings are baked into `MINIMAX_BODY`. To adjust a
+rare flag, edit `synth.ts` (the agent can do it via its `edit`
+tool). `telegram.json` only carries the 3 essentials:
+`disabled` + `provider` + `composeWithText`.
 
 **STT is delegated to [`pi-telegram-stt`](../pi-telegram-stt/README.md)**
 and its provider extensions. This package only does TTS.
@@ -24,15 +27,8 @@ From npm (once published):
 pi install npm:pi-telegram-tts
 ```
 
-The bundled scripts are exposed on PATH after install:
-- `tts-minimax` — MiniMax T2A HTTP client (CLI)
-- `tts-openai` — OpenAI `/v1/audio/speech` client (CLI)
-
-Test with:
-```bash
-tts-minimax --help
-tts-openai --help
-```
+(No `bin` field since v0.7.0 — the scripts are gone. The provider is
+the only TTS path; no separate CLI tool is exposed.)
 
 On-host dev loader (one-liner re-export shim), assuming the operator
 runs from the source repo:
@@ -43,12 +39,9 @@ export { default } from "/path/to/this/repo/extensions/pi-telegram-tts/index.ts"
 EOF
 ```
 
-The bundled scripts are at `extensions/pi-telegram-tts/tts-{minimax,openai}.mjs`
-in the source repo. The `synth.ts` `resolveScriptPath` finds them in the
-same dir (dev) or on PATH (npm install) — no separate peer-dep package
-needed.
+The provider body constants live in `extensions/pi-telegram-tts/synth.ts`.
 
-## Configure (v0.1.0)
+## Configure (v0.7.0)
 
 Edit `~/.pi/agent/telegram.json`:
 
@@ -59,9 +52,9 @@ Edit `~/.pi/agent/telegram.json`:
 	},
 	"extensions": {
 		"pi-telegram-tts": {
+			"disabled": false,
 			"provider": "minimax",
-			"voice": "Cantonese_PlayfulMan",
-			"model": "speech-2.8-hd"
+			"composeWithText": "auto"
 		}
 	}
 }
@@ -69,24 +62,18 @@ Edit `~/.pi/agent/telegram.json`:
 
 | Field | Type | Notes |
 | --- | --- | --- |
+| `disabled` | boolean | master switch — `true` returns `undefined` and the bridge falls through |
 | `provider` | `"minimax"` \| `"openai"` | required for the provider to fire |
-| `voice` | string | passed as `--voice` to the TTS script (v0.1.0 top-level; v0.3.0 sub-block `minimax.voice` / `openai.voice` supersedes) |
-| `model` | string | passed as `--model` to the TTS script (v0.1.0 top-level; v0.3.0 sub-block `minimax.model` / `openai.model` supersedes) |
-| `disabled` | boolean | (v0.2.0) master switch — `true` falls through to the bridge's `outboundHandlers[0].template` |
-| `minimax` | object | (v0.3.0) per-provider sub-block — every CLI arg the script supports |
-| `openai` | object | (v0.3.0) per-provider sub-block — every CLI arg the script supports |
+| `composeWithText` | `"off"` \| `"auto"` | (v0.4.0) `"auto"` sends a text message with the same content as the voice, then the voice follows; `"off"` (default) sends voice only |
 
 Live edits take effect on the next voice-tagged turn (the provider
-re-reads config on every call).
+re-reads config on every call; the 200ms hot-reload watcher picks
+up the change).
 
-## v0.3.0 — Per-provider sub-block (full parameter surface)
-
-The v0.1.0 config above covers `voice` + `model`. v0.3.0 expands to
-**per-provider sub-blocks** that make every CLI arg the bundled
-`tts-*.mjs` scripts support reachable from `telegram.json` — no
-template editing required.
-
-> 📋 **`schema.json`** ships with the package (Draft 2020-12). Add `"$schema": "..."` to your `telegram.json` to get inline editor validation for every field, including the enums (`emotion`, `sound_effects`, `format`, `sample_rate`, `bitrate`, `output_format`, `response_format`), ranges (`speed`, `vol`, `pitch`, `channel`), and pattern constraints (`pronunciation_dict.tone` must be slash-separated `word/pronunciation` pairs). See `extensions/pi-telegram-tts/schema.json` for the canonical reference.
+**Adjusting voice settings (e.g. `speed`, `emotion`, `lang`):** the
+v0.3.0 / v0.6.0 per-provider sub-block pattern is gone. The
+constants are in `synth.ts:MINIMAX_BODY` (and `OPENAI_BODY`).
+Edit the file directly; the agent can do it via its `edit` tool.
 
 ```json
 {
@@ -120,142 +107,71 @@ template editing required.
 
 ### How it works
 
-`synth.ts` writes the sub-block (with the v0.1.0 top-level `voice` /
-`model` as fallbacks) to a tempfile inside the same tempdir it
-already creates for the OGG, and passes `--config <path>` to the
-script. The script's own merge pipeline
-(`DEFAULTS ← --config deep-merge ← --config path-mapping ← CLI flags`)
-applies the `CLI_TO_PATH` remap so flat names like `voice` /
-`speed` / `lang` land at the nested API paths
-(`voice_setting.voice_id` / `voice_setting.speed` /
-`language_boost`). See `tts-minimax.mjs:315-380` and
-`tts-openai.mjs:200-235` for the path-mapping block. **A small
-script-side change was needed after all** — the v0.3.0 plan
-originally said no script changes, but the script's `--config`
-flag is a raw body deep-merge and does not run the `CLI_TO_PATH`
-remap on its own; without the remap, a flat-name sub-block
-lands at the top level of the request body and the API silently
-ignores it. The fix is small (~25 lines per script) and the
-script's own `CLI_TO_PATH` is the source of truth for the path
-map.
+`synth.ts` has two `fetch` adapters — one per provider — and a
+5-line dispatcher. Each adapter:
 
-### Precedence
+1. Resolves the API key (env var → `~/.mmx/config.json` for
+   MiniMax, or `~/.pi/agent/auth.json` for OpenAI).
+2. POSTs the hardcoded provider body (with `text` interpolated from
+   the LLM's reply) to the provider's endpoint.
+3. Writes the response (MP3 for both providers by default) to a
+   tempdir, runs ffmpeg to convert to OGG/Opus, returns the OGG path.
+4. Schedules a 60s tempdir cleanup timer.
 
-For each field the sub-block wins over the top-level. The merge is
-per-key, not wholesale:
+The provider body constants live at the top of `synth.ts`:
 
-- `extensions["pi-telegram-tts"].voice` + `minimax.voice` both set →
-  `minimax.voice` wins.
-- `extensions["pi-telegram-tts"].voice` set, no `minimax.voice` →
-  top-level `voice` is used (sub-block inherits).
-- `minimax: { speed: 1.2 }` only → script sees `{ speed: 1.2 }` and
-  the rest of the body comes from the script's built-in defaults.
+- `MINIMAX_BODY` — operator's current Cantonese voice settings
+  (`voice_id: "Cantonese_CuteGirl"`, `speed: 0.95`, `emotion:
+  "happy"`, `language_boost: "Chinese,Yue"`, `modify_intensity: 0`,
+  `modify_timbre: 10`, etc.). Edit this file to adjust.
+- `OPENAI_BODY` — API defaults (`model: "gpt-4o-mini-tts"`, `voice:
+  "alloy"`, `response_format: "mp3"`, `speed: 1.0`).
 
-### Top-level `voice` / `model` are still supported
+The 3-field `SynthConfig` (`disabled`, `provider`, `composeWithText`)
+is read from `telegram.json#extensions["pi-telegram-tts"]` on every
+call. The 200ms hot-reload watcher picks up changes; the next
+voice-tagged turn uses the new config.
 
-Existing v0.1.0 / v0.2.0 configs keep working unchanged. v0.3.0
-adds the sub-block; the top-level `voice` / `model` keep working as
-fallback. The v0.6.0 schema.json description already notes the
-future deprecation (`> Deprecated: use the per-provider sub-block
-instead`); they remain supported through v0.6.0 and will be
-removed in v1.0.
+**Why this is simpler than v0.3.0 / v0.6.0:** the per-provider
+sub-block pattern (`minimax: { voice, model, speed, ... }`) is
+gone. No more schema validation, no more per-key merge, no more
+`--config` tempfile + subprocess. The LLM's reply is the only
+dynamic field. Adjusting a rare voice flag is an edit to
+`synth.ts:MINIMAX_BODY` — the agent can do this via its `edit`
+tool, which is the "operator or agent can change these flags"
+mechanism.
 
-### Available sub-block fields
+## Migration from v0.6.0
 
-The sub-block is type-checked as `{ [field: string]: unknown }`
-from the TypeScript side; the script is the runtime validator (it
-runs `validateBody()` and exits 2 on invalid values; the provider
-returns `undefined` and the bridge falls through to the template).
-The field list per provider:
+v0.7.0 drops the bundled `tts-*.mjs` scripts. The on-host
+`telegram.json` `outboundHandlers[0].template` paths (if any) become
+dead references — clear `outboundHandlers[0]` (set it to `[]` or
+delete the key) so the synthesis provider is the sole TTS path.
+The provider now does a direct `fetch` to the configured provider;
+no subprocess is spawned.
 
-- **MiniMax** (`tts-minimax.mjs:198-217` + `:262-272`): `model`,
-  `voice`, `speed`, `vol`, `pitch`, `emotion`, `text_normalization`,
-  `latex_read`, `lang`, `sample_rate`, `bitrate`, `format`,
-  `channel`, `modify_pitch`, `modify_intensity`, `modify_timbre`,
-  `sound_effects`, `subtitle_type`, `output_format`, `force_cbr`,
-  `subtitle_enable`, `emoji_event`, `aigc_watermark`,
-  `apply_text_filter`, `pronunciation_dict.tone` (array),
-  `timbre_weights` (array of objects). MiniMax-only nested fields
-  the CLI doesn't cover cleanly are best set as nested objects in
-  the sub-block (e.g. `pronunciation_dict: { tone: [...] }`).
-- **OpenAI** (`tts-openai.mjs:127-138` + `:223-229`): `model`,
-  `voice`, `response_format`, `speed`, `instructions`.
+If you previously used the per-provider sub-block
+(`minimax: { voice, model, speed, ... }`): those fields are now
+hardcoded in `synth.ts:MINIMAX_BODY`. The operator's current
+values were preserved in the cut (Cantonese_CuteGirl / speed 0.95 /
+emotion happy / Chinese,Yue lang / etc.). If you want a different
+voice or a different speed, edit the constants in `synth.ts`. The
+agent can do it via its `edit` tool.
 
-The sub-block for the wrong provider is silently ignored (the
-script reads its own schema only — an `openai: { instructions: "…" }`
-in a MiniMax sub-block is ignored because the MiniMax script has
-no `instructions` key in its DEFAULTS / CLI).
-
-## Migration from 0.1.2
-
-The v0.2.0 release moves the `tts-*.mjs` scripts from the separate
-`pi-voice-telegram-scripts` npm package into `pi-telegram-tts`. The
-scripts are unchanged (same CLI args, same auth, same ffmpeg output);
-the only delta is the dispatch (now bundled, no separate package
-install).
-
-If you have an existing `outboundHandlers[0].template` pointing at the
-old `pi-voice-telegram-scripts` package, update the path:
-
-```diff
- "outboundHandlers": [
-   {
-     "type": "voice",
-     "template": [
--      "/path/to/extensions/pi-voice-telegram-scripts/tts-minimax.mjs --out {mp3} ..."
-+      "/path/to/extensions/pi-telegram-tts/tts-minimax.mjs --out {mp3} ..."
-       "ffmpeg -y -i {mp3} ..."
-     ]
-   }
- ]
-```
-
-Or, since `pi-telegram-tts@0.2.0` exposes the bins:
-
-```diff
- "template": [
--  "/path/to/extensions/pi-voice-telegram-scripts/tts-minimax.mjs --out {mp3} ..."
-+  "tts-minimax --out {mp3} ..."   # the bin field exposes this on PATH
-   "ffmpeg -y -i {mp3} ..."
- ]
-```
-
-(Both paths work; the absolute path is a 1-line change for the v0.19.0
-default path, the bin name is the npm-install idiom.)
-
-The `pi-voice-telegram-scripts` npm package is deprecated — `npm install
-pi-voice-telegram-scripts` will print a deprecation warning. The new
-install path is just `npm install pi-telegram-tts@latest`.
+If you previously set `voice` + `model` at the top level of
+`extensions["pi-telegram-tts"]`: those fields are no longer read.
+The provider now uses the hardcoded `MINIMAX_BODY` (or
+`OPENAI_BODY`) constants.
 
 ## Migration from the existing template
 
 If you already have `outboundHandlers[0].template` configured (the
-v0.19.0 default path), three options:
+v0.19.0 default path): clear it. The v0.7.0 provider is a direct
+`fetch` — there's no subprocess to fall back to. The operator's
+`outboundHandlers[0]` (if any) is now dead weight; setting it to
+`[]` makes the provider the sole TTS path.
 
-1. **Replace** — clear `outboundHandlers[0]` so the provider is the
-   sole TTS path. **Recommended** for the sub-block + form-driven
-   config in v0.4.0.
-2. **Keep template as primary, provider as fallback** — leave
-   `outboundHandlers[0]` in place. The template fires first; the
-   provider only runs if the template fails.
-3. **Don't install** — nothing changes. The existing template keeps
-   working exactly as before. The package is opt-in.
-
-After v0.2.0 is in place, the upstream voice reply pipeline
-(`lib/outbound-voice.ts:185-276`) iterates: configured
-`outboundHandlers[0]` → programmatic voice handlers → registered
-synthesis providers. Our provider is tier 3.
-
-> **Upstream note (v0.39.0+):** the `voice.sendTranscript` config,
-> the `getTelegramVoiceSendTranscript()` helper, and the
-> provider-returned `transcriptText` field were all removed. Synthesis
-> providers now return only the OGG path; text-plus-voice is the
-> agent's explicit composition (compose the text reply + the voice
-> reply), not an automatic policy. The v0.4.0 stage 1 work
-> re-implements the v0.1.0 `sendTranscript: true` behavior at the
-> extension level via the new `composeWithText` config (see below).
-
-## v0.2.0 / v0.4.0 / v0.6.0 capabilities
+## v0.2.0 / v0.4.0 / v0.6.0 / v0.7.0 capabilities
 
 - `getVoicePromptContribution(view)` adds `[tts] Reply briefly; this
   turn will be spoken aloud via the configured TTS provider.` to
@@ -276,6 +192,19 @@ synthesis providers. Our provider is tier 3.
   it's the extension's own config interface at call time — the
   agent's `read` tool is the surface for operator / agent
   inspection, not the extension's runtime path.
+- **v0.7.0:** the bundled `tts-{minimax,openai}.mjs` scripts (1215
+  lines combined) + the per-provider sub-block pattern
+  (`minimax: { voice, model, speed, ... }`) + the `schema.json`
+  Draft 2020-12 schema (271 lines) + the `bin` field in
+  `package.json` are all **deleted**. The provider does a direct
+  `fetch` to the configured provider; the body is a hardcoded
+  constant per provider (the operator's current Cantonese voice
+  settings are baked into `MINIMAX_BODY`). The LLM's reply is
+  the only field interpolated at call time. `telegram.json`
+  carries just 3 fields: `disabled`, `provider`,
+  `composeWithText`. To adjust a rare voice flag, edit
+  `synth.ts:MINIMAX_BODY` — the agent can do it via its `edit`
+  tool.
 
 ## v0.4.0 stage 1 — text+voice composition
 
@@ -322,15 +251,17 @@ voice-tagged turn.
   telegram.json-driven config is sufficient for single-operator
   setups; the v0.2.0 + v0.4.0 section work was dropped on
   2026-08-24).
-- **Top-level `voice` / `model` deprecation** — they keep working
-  through v0.6.0; the v0.6.0 schema.json description already notes
-  the future deprecation (`> Deprecated: use the per-provider
-  sub-block instead`), but the actual schema-level deprecation
-  marker is still a planned future change. Removal is targeted
-  for v1.0.
+- **Top-level `voice` / `model` removal** — they no longer work
+  (the v0.7.0 reader ignores them; the runtime uses
+  `synth.ts:MINIMAX_BODY` directly). The v0.6.0 schema.json
+  description (now deleted) noted the deprecation. Operators
+  with a v0.6.0 config that set `voice` / `model` at the top
+  level should drop those keys (they're silently ignored
+  anyway).
 - **Temp-file cleanup** — the OGG produced by the provider lingers
-  in `<tmp>/` after upload. v0.7.0 schedules `unlink` 30s after
-  upload.
+  in `<tmp>/` after upload. v0.8.0 schedules `unlink` 30s after
+  upload (was reserved as v0.7.0 in the plan; renumbered when
+  v0.7.0 became the script-drop release).
 
 ## Diagnostics
 

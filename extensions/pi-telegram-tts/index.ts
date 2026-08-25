@@ -1,72 +1,9 @@
 /**
- * pi-telegram-tts — voice synthesis provider for the Pi coding agent +
- * @llblab/pi-telegram bridge. Spawns the same tts-{minimax,openai}.mjs
- * scripts the operator's outboundHandlers template uses, but through
- * the synthesis-provider API so `getVoicePromptContribution` works.
- *
- * v0.1.0 — provider only, no section UI (deferred to v0.2.0).
- * v0.2.0 — `tts-*.mjs` scripts bundled into this package (was a
- *           separate `pi-voice-telegram-scripts` peer-dep, now
- *           deprecated). The `bin` field exposes both on PATH.
- *           The v0.2.0 `/telegram-settings` Section UI was
- *           DROPPED on 2026-08-24 per the operator's request —
- *           all config is via `telegram.json`. The v0.2.0
- *           section work is preserved in git history for reference.
- * v0.3.0 — per-provider sub-block config (`minimax: {…}` /
- *           `openai: {…}`) makes every CLI arg the script supports
- *           reachable from `telegram.json`. `synth.ts` writes the
- *           sub-block to a tempfile and passes `--config <path>`;
- *           the script's own deep-merge handles the rest.
- * v0.4.0 — upstream `@llblab/pi-telegram@0.39.0` removed the
- *           `voice.sendTranscript` config + the
- *           `getTelegramVoiceSendTranscript()` helper + the
- *           provider-returned `transcriptText` field. Synthesis
- *           providers now return only the OGG path; "voice with
- *           text caption" is the agent's explicit composition
- *           (compose the text reply + the voice reply), not an
- *           automatic policy. So we dropped the `telegramConfig`
- *           param from `synthesizeOgg` + the `sendTranscript`
- *           branch in the return value. **Stage 1 of v0.4.0**
- *           re-implements the v0.1.0 `sendTranscript: true`
- *           behavior at the extension level: when
- *           `extensions["pi-telegram-tts"].composeWithText === "auto"`,
- *           the provider sends a text message with the same content
- *           as the voice, just before returning the OGG path. The
- *           user sees text first, then voice. Driven entirely by
- *           `telegram.json` — no upstream dependency.
- * v0.6.0 — the in-package `saveSynthConfig` writer + the
- *           `loadTelegramConfig` reader were dropped. Per the
- *           operator's design rule: every config knob lives in
- *           `telegram.json`, edited by the operator or the agent
- *           via filesystem tools, picked up live by the 200ms
- *           hot-reload watcher. The in-package readers stay
- *           because they're the extension's own config interface
- *           at call time. (The form-driven section UI was already
- *           dropped in v0.4.0 per the 2026-08-24 directive.)
- *
- * Public APIs used (all stable per @llblab/pi-telegram):
- *   - `@llblab/pi-telegram/voice`    → registerTelegramVoiceSynthesisProvider
- *   - `@llblab/pi-telegram/outbound` → recordTelegramRuntimeEvent
- *   - `@llblab/pi-telegram/delivery` → sendTelegramView
- *                                       (v0.4.0 stage 1: text+voice composition)
- *   - `@earendil-works/pi-coding-agent` → ExtensionAPI, getAgentDir
- *
- * Required host-side runtime (NOT bundled):
- *   - `ffmpeg` on PATH (for MP3 → OGG/Opus conversion).
- *   - Either the MiniMax T2A or OpenAI /v1/audio/speech env config
- *     (`MINIMAX_API_KEY` / `OPENAI_API_KEY`, per the scripts).
- *
- * Lifecycle:
- *   1. Module load: register the provider at the top level. This
- *      handles the load-order race documented in
- *      `docs/voice.md:42` — if a voice message arrives before our
- *      `session_start` fires, the provider is already in the registry.
- *   2. `session_start`: re-register idempotently (the module-load
- *      registration is durable; the session_start registration is
- *      pushed onto the disposers array so the next shutdown tears it
- *      down).
- *   3. `session_shutdown`: dispose the session_start registration.
- *      The module-load registration stays for the process lifetime.
+ * pi-telegram-tts — voice synthesis provider. Direct `fetch` to the
+ * configured provider; see synth.ts for the TTS pipeline and
+ * telegram-config.ts for the 3-field `telegram.json` surface. Public
+ * APIs + lifecycle + operational notes live in
+ * `docs/PI-TELEGRAM-TTS-DESIGN.md` §13.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -87,32 +24,12 @@ const log = makeLogger("pi-telegram-tts");
 
 const PROVIDER_ID = "pi-telegram-tts/synth";
 
-/**
- * Provider callable. The bridge v0.36.11 contract
- * (`@llblab/pi-telegram/voice:58-67` + `outbound-voice.ts:235-244`)
- * requires the registered provider to be a *function* with optional
- * `getVoicePolicy` / `getVoicePromptContribution` properties. An
- * object literal satisfies the TypeScript type but fails the bridge's
- * runtime `typeof provider !== "function"` check
- * (`outbound-voice.ts:235`), which records a "Registered voice
- * synthesis provider is not callable (policy-only object?)" runtime
- * event and skips the provider entirely.
- *
- * The bridge's own `registerTelegramVoiceSynthesisProvider` wraps
- * function inputs with the same `Object.assign(callable, properties)`
- * pattern (`voice.ts:131-141`); we mirror it here so the in-process
- * smoke test sees the same shape the bridge sees.
- *
- * v0.4.0 stage 1 — text+voice composition. When
- * `cfg.composeWithText === "auto"`, send a text message with the
- * same content as the voice just before returning the OGG path.
- * The user sees text first, then voice. Best-effort: a
- * `sendTelegramView` failure is logged + recorded as a runtime
- * event, and the voice is still delivered. The text is sent to
- * the current turn's chat via the upstream's
- * `{ scope: { kind: "active-turn" } }` delivery scope — we don't
- * need the chat ID ourselves.
- */
+// Bridge v0.36.11 contract: registered provider must be a function (the
+// `Object.assign(callable, properties)` pattern mirrors the bridge's own
+// `registerTelegramVoiceSynthesisProvider` wrapper). v0.4.0 stage 1:
+// composeWithText="auto" sends the text reply in parallel with the tts
+// fetch, so the user sees text first, then voice (text + voice
+// composition in lieu of the removed upstream voice.sendTranscript).
 async function synthesizeCall(
 	text: string,
 	options?: { lang?: string; rate?: string },
@@ -239,9 +156,8 @@ const provider: TelegramVoiceSynthesisProvider = Object.assign(
 	},
 );
 
-// Module-load registration (load-order safety, same pattern as
-// pi-openai-stt/index.ts:96-110). The bridge may call this provider
-// before our session_start fires (if a voice message arrives early).
+// Module-load registration (load-order safety — the bridge may call
+// this provider before our session_start fires).
 try {
 	registerTelegramVoiceSynthesisProvider(provider, { id: PROVIDER_ID });
 	log.info("registered at module load", { id: PROVIDER_ID });
@@ -260,13 +176,9 @@ try {
 export default function piTelegramTts(pi: ExtensionAPI): void {
 	const disposers: Array<() => void> = [];
 
-	// v0.4.0 section UI was dropped on 2026-08-24 per the operator's
-	// request — the form-driven UI was more trouble than the
-	// telegram.json-driven config. v0.6.0 also dropped the
-	// in-package `saveSynthConfig` writer + `loadTelegramConfig`
-	// reader. All config is via telegram.json (see README.md
-	// "telegram.json-driven config" + the plan doc v0.6.0 entry
-	// for the rationale).
+	// v0.4.0 section UI dropped (operator directive 2026-08-24); v0.6.0
+	// dropped the in-package config writer. See PI-TELEGRAM-TTS-PLAN.md
+	// Progress table.
 
 	// Re-register on session_start (idempotent; the try above handles
 	// duplicate-id on first load). The session_start registration's

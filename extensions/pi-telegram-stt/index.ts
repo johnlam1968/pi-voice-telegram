@@ -1,14 +1,7 @@
 /**
- * pi-telegram-stt — entry point. Wires the STT + 🎙️ echo handlers,
- * the config watcher, and the bundled `pi-openai-stt` provider
- * registration.
- *
- * **v0.10.0:** the `/telegram-settings` section UI was dropped
- * (per the operator's request — `telegram.json` is sufficient for
- * single-operator setups). All config is via `telegram.json`.
- *
- * Full design + version history + per-component docs live in
- * `docs/STT-PACKAGE.md`. This file is the lifecycle orchestrator.
+ * pi-telegram-stt — entry point. Wires the STT + echo handlers, the
+ * config watcher, and the bundled `pi-openai-stt` provider
+ * registration. Design + version history live in `docs/STT-PACKAGE.md`.
  */
 
 import { existsSync, watch, type FSWatcher } from "node:fs";
