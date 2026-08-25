@@ -1,6 +1,6 @@
 {
   "name": "pi-telegram-tts",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "TTS synthesis provider for the Pi coding agent + @llblab/pi-telegram bridge. Registers a synthesis provider against the bridge's public voice API so getVoicePromptContribution works. Direct `fetch` to the configured provider (MiniMax or OpenAI) — no bundled scripts, no bin field, no per-provider sub-block. The LLM's reply is the only dynamic field; all other API params are hardcoded constants in synth.ts. Configure via telegram.json#extensions[\"pi-telegram-tts\"] (3 fields: disabled, provider, composeWithText).",
   "type": "module",
   "license": "MIT",

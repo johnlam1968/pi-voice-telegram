@@ -137,7 +137,7 @@ async function ffmpegToOgg(mp3Path: string, oggPath: string): Promise<void> {
 // API; write the response to a tempdir; ffmpeg; return the OGG path.
 // ============================================================================
 
-async function callMinimax(text: string): Promise<string | undefined> {
+async function callMinimax(text: string, cfg: SynthConfig): Promise<string | undefined> {
 	const apiKey = resolveMinimaxKey();
 	if (!apiKey) {
 		log.error("missing minimax api key");
@@ -150,12 +150,21 @@ async function callMinimax(text: string): Promise<string | undefined> {
 	const mp3 = join(tempDir, `${randomUUID()}.mp3`);
 	const ogg = join(tempDir, `${randomUUID()}.ogg`);
 	try {
-		const body = { ...MINIMAX_BODY, text };
+		const body = {
+			...MINIMAX_BODY,
+			voice_setting: {
+				...MINIMAX_BODY.voice_setting,
+				voice_id: cfg.voice ?? MINIMAX_BODY.voice_setting.voice_id,
+				speed: cfg.speed ?? MINIMAX_BODY.voice_setting.speed,
+			},
+			text,
+		};
 		log.info("tts fetch", {
 			provider: "minimax",
 			url: MINIMAX_URL,
 			model: MINIMAX_BODY.model,
-			voice: MINIMAX_BODY.voice_setting.voice_id,
+			voice: body.voice_setting.voice_id,
+			speed: body.voice_setting.speed,
 			chars: text.length,
 		});
 		const response = await fetch(MINIMAX_URL, {
@@ -218,7 +227,7 @@ async function callMinimax(text: string): Promise<string | undefined> {
 	}
 }
 
-async function callOpenai(text: string): Promise<string | undefined> {
+async function callOpenai(text: string, cfg: SynthConfig): Promise<string | undefined> {
 	const apiKey = resolveOpenaiKey();
 	if (!apiKey) {
 		log.error("missing openai api key");
@@ -231,12 +240,19 @@ async function callOpenai(text: string): Promise<string | undefined> {
 	const mp3 = join(tempDir, `${randomUUID()}.mp3`);
 	const ogg = join(tempDir, `${randomUUID()}.ogg`);
 	try {
-		const body = { ...OPENAI_BODY, input: text };
+		const body: Record<string, unknown> = {
+			...OPENAI_BODY,
+			voice: cfg.voice ?? OPENAI_BODY.voice,
+			speed: cfg.speed ?? OPENAI_BODY.speed,
+			input: text,
+		};
+		if (cfg.instructions) body.instructions = cfg.instructions;
 		log.info("tts fetch", {
 			provider: "openai",
 			url: OPENAI_URL,
 			model: OPENAI_BODY.model,
-			voice: OPENAI_BODY.voice,
+			voice: body.voice,
+			speed: body.speed,
 			chars: text.length,
 		});
 		const response = await fetch(OPENAI_URL, {
@@ -298,7 +314,7 @@ export async function synthesizeOgg(
 ): Promise<string | undefined> {
 	if (cfg.disabled) return undefined;
 	const provider: ProviderId | undefined = cfg.provider;
-	if (provider === "minimax") return await callMinimax(text);
-	if (provider === "openai") return await callOpenai(text);
+	if (provider === "minimax") return await callMinimax(text, cfg);
+	if (provider === "openai") return await callOpenai(text, cfg);
 	return undefined;
 }

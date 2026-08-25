@@ -25,12 +25,28 @@ export interface SynthConfig {
 	 * the voice, then the voice follows.
 	 */
 	composeWithText?: "off" | "auto";
+	/**
+	 * v0.7.1: minimal per-call overrides. The hardcoded
+	 * `MINIMAX_BODY` / `OPENAI_BODY` constants in `synth.ts` carry
+	 * the operator's current defaults; these 3 fields let the
+	 * agent (or operator) tune the voice without editing source.
+	 * The 200ms hot-reload picks up `telegram.json` edits.
+	 */
+	/** Provider-specific voice id (e.g. MiniMax `voice_id`, OpenAI `voice`). */
+	voice?: string;
+	/** Speech rate (OpenAI: 0.25–4.0, MiniMax: 0.5–2.0). */
+	speed?: number;
+	/** OpenAI style hint. Ignored for MiniMax. */
+	instructions?: string;
 }
 
 export const DEFAULTS: SynthConfig = {
 	disabled: false,
 	provider: undefined,
 	composeWithText: undefined,
+	voice: undefined,
+	speed: undefined,
+	instructions: undefined,
 };
 
 const KEY = "pi-telegram-tts";
@@ -64,6 +80,18 @@ export function loadSynthConfig(): SynthConfig {
 				block.composeWithText === "auto" || block.composeWithText === "off"
 					? block.composeWithText
 					: DEFAULTS.composeWithText,
+			voice:
+				typeof block.voice === "string" && block.voice
+					? block.voice
+					: DEFAULTS.voice,
+			speed:
+				typeof block.speed === "number" && block.speed > 0
+					? block.speed
+					: DEFAULTS.speed,
+			instructions:
+				typeof block.instructions === "string" && block.instructions
+					? block.instructions
+					: DEFAULTS.instructions,
 		};
 	} catch {
 		return structuredClone(DEFAULTS);

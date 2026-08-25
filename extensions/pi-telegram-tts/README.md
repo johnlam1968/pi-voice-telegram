@@ -65,15 +65,20 @@ Edit `~/.pi/agent/telegram.json`:
 | `disabled` | boolean | master switch — `true` returns `undefined` and the bridge falls through |
 | `provider` | `"minimax"` \| `"openai"` | required for the provider to fire |
 | `composeWithText` | `"off"` \| `"auto"` | (v0.4.0) `"auto"` sends a text message with the same content as the voice, then the voice follows; `"off"` (default) sends voice only |
+| `voice` | string | (v0.7.1) provider-specific voice id (overrides `synth.ts:MINIMAX_BODY.voice_setting.voice_id` / `OPENAI_BODY.voice`). MiniMax voice ids: `Cantonese_CuteGirl`, `male-qn-qingse`, etc. OpenAI voice ids: `alloy`, `echo`, `shimmer`, etc. |
+| `speed` | number | (v0.7.1) speech rate. OpenAI: 0.25–4.0; MiniMax: 0.5–2.0. |
+| `instructions` | string | (v0.7.1) OpenAI style hint ("Speak in a calm, professional tone"). Ignored for MiniMax. |
 
 Live edits take effect on the next voice-tagged turn (the provider
 re-reads config on every call; the 200ms hot-reload watcher picks
 up the change).
 
-**Adjusting voice settings (e.g. `speed`, `emotion`, `lang`):** the
-v0.3.0 / v0.6.0 per-provider sub-block pattern is gone. The
-constants are in `synth.ts:MINIMAX_BODY` (and `OPENAI_BODY`).
-Edit the file directly; the agent can do it via its `edit` tool.
+**Adjusting voice settings:** the 3 fields above (`voice` /
+`speed` / `instructions`) cover the common case. The other API
+fields (e.g. `lang`, `emotion`, `format`) are still hardcoded in
+`synth.ts:MINIMAX_BODY` / `OPENAI_BODY` — edit the file directly
+(or have the agent edit it via its `edit` tool) for rarer
+adjustments.
 
 ```json
 {
@@ -127,10 +132,13 @@ The provider body constants live at the top of `synth.ts`:
 - `OPENAI_BODY` — API defaults (`model: "gpt-4o-mini-tts"`, `voice:
   "alloy"`, `response_format: "mp3"`, `speed: 1.0`).
 
-The 3-field `SynthConfig` (`disabled`, `provider`, `composeWithText`)
-is read from `telegram.json#extensions["pi-telegram-tts"]` on every
+The `SynthConfig` (`disabled`, `provider`, `composeWithText`, plus
+v0.7.1's `voice` / `speed` / `instructions` overrides) is read
+from `telegram.json#extensions["pi-telegram-tts"]` on every
 call. The 200ms hot-reload watcher picks up changes; the next
-voice-tagged turn uses the new config.
+voice-tagged turn uses the new config. The 3 override fields
+let the agent (or operator) tune the voice mid-conversation
+without editing source.
 
 **Why this is simpler than v0.3.0 / v0.6.0:** the per-provider
 sub-block pattern (`minimax: { voice, model, speed, ... }`) is
